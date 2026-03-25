@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { CheckCircle2, ChevronRight, ChevronLeft, Wind, Map, Anchor, ShieldAlert, ArrowRight, Download, Search, Database, Route } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 import AppSidebar from "@/components/AppSidebar";
 import { AdvancedWindAnalysis } from "@/components/AdvancedWindAnalysis";
@@ -21,6 +22,7 @@ import { calculateRunwayUsability, type RunwayUsabilityResult, optimizeRunwayOri
 import { aircraftDatabase, searchAircraft, filterByCategory, type AircraftData } from "@/data/aircraftDatabase";
 import { loadSampleDataAsFile, SAMPLE_PRESETS } from "@/lib/sampleDataGenerator";
 import DataSourcesModule from "@/components/DataSourcesModule";
+import ScenarioComparison from "@/components/ScenarioComparison";
 import { DISCLAIMER, DATA_LABELS } from "@/lib/engineeringSafety";
 import { useAnalysis } from "@/contexts/AnalysisContext";
 import { exportCSV } from "@/lib/exportUtils";
@@ -50,7 +52,12 @@ const WaterRunwayPage = () => {
   const [completedTabs, setCompletedTabs] = useState<Set<TabId>>(new Set(["project"]));
 
   const tabIdx = TABS.findIndex(t => t.id === activeTab);
+  const navigate = useNavigate();
   const goNext = () => {
+    if (tabIdx >= TABS.length - 1) {
+      navigate("/report?type=water");
+      return;
+    }
     const nextId = TABS[Math.min(tabIdx + 1, TABS.length - 1)].id;
     setCompletedTabs(prev => new Set(prev).add(nextId));
     setActiveTab(nextId);
@@ -317,6 +324,14 @@ const WaterRunwayPage = () => {
                       <DataReadout value={windRose?.calmFrequency.toFixed(1) ?? "—"} unit="%" label="Calm Freq." />
                     </div>
                   </InstrumentCard>
+                  {parsedData && (
+                    <ScenarioComparison
+                      records={records}
+                      sectorSizeDeg={parseFloat(sectorType) || 22.5}
+                      monthFilter={monthFilter === "all" ? null : [parseInt(monthFilter)]}
+                      useGust={false}
+                    />
+                  )}
                   <InstrumentCard title="Analysis Options">
                     <div className="space-y-3">
                       <AeroInput label="Calm Threshold" placeholder="3" unit="KT" value={calmThresh} onChange={setCalmThresh} />
@@ -789,8 +804,8 @@ const WaterRunwayPage = () => {
             <ChevronLeft className="w-4 h-4" />{tabIdx > 0 ? TABS[tabIdx - 1].label : "Back"}
           </button>
           <span className="text-[10px] font-mono-data text-muted-foreground">Step {tabIdx + 1} of {TABS.length}</span>
-          <button onClick={goNext} disabled={tabIdx === TABS.length - 1} className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-cyan-600 text-white rounded-sm hover:bg-cyan-500 transition-all disabled:opacity-30 disabled:cursor-not-allowed">
-            {tabIdx < TABS.length - 1 ? TABS[tabIdx + 1].label : "Done"}<ChevronRight className="w-4 h-4" />
+          <button onClick={goNext} disabled={false} className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-cyan-600 text-white rounded-sm hover:bg-cyan-500 transition-all disabled:opacity-30 disabled:cursor-not-allowed">
+            {tabIdx < TABS.length - 1 ? TABS[tabIdx + 1].label : "Reports Center"}<ChevronRight className="w-4 h-4" />
           </button>
         </div>
       </main>

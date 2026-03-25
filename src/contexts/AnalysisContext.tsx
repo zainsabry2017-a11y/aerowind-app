@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from "react";
 import type { ParsedWindData, WindRecord } from "@/lib/windDataParser";
 import type { WindRoseResult } from "@/lib/windRoseCalculator";
 import type { RunwayUsabilityResult, OptimizationResult } from "@/lib/windComponents";
@@ -95,25 +95,62 @@ interface AnalysisContextType extends AnalysisState {
   setAirportReportData: (data: AirportReportData | null) => void;
   setHeliportReportData: (data: HeliportReportData | null) => void;
   setWaterReportData: (data: WaterReportData | null) => void;
+
+  /** Replace the full analysis state (used by JSON import/restore). */
+  hydrate: (next: Partial<AnalysisState>) => void;
 }
 
 const AnalysisContext = createContext<AnalysisContextType | null>(null);
 
+const STORAGE_KEY = "aerowind.analysis.v1";
+
+const DEFAULT_STATE: AnalysisState = {
+  windData: null,
+  windRose: null,
+  runwayCandidates: [],
+  runwayOptimization: null,
+  crosswindLimit: 13,
+  runwayLength: null,
+  runwayLengthInputs: null,
+  waterRunway: null,
+  helipad: null,
+  airportReportData: null,
+  heliportReportData: null,
+  waterReportData: null,
+};
+
 export const AnalysisProvider = ({ children }: { children: ReactNode }) => {
-  const [state, setState] = useState<AnalysisState>({
-    windData: null,
-    windRose: null,
-    runwayCandidates: [],
-    runwayOptimization: null,
-    crosswindLimit: 13,
-    runwayLength: null,
-    runwayLengthInputs: null,
-    waterRunway: null,
-    helipad: null,
-    airportReportData: null,
-    heliportReportData: null,
-    waterReportData: null,
+  const [state, setState] = useState<AnalysisState>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return DEFAULT_STATE;
+      const parsed = JSON.parse(raw);
+      const saved = (parsed && typeof parsed === "object" ? parsed.state : null) as Partial<AnalysisState> | null;
+      if (!saved || typeof saved !== "object") return DEFAULT_STATE;
+      return { ...DEFAULT_STATE, ...saved };
+    } catch {
+      return DEFAULT_STATE;
+    }
   });
+
+  const saveTimerRef = useRef<number | null>(null);
+  useEffect(() => {
+    // Debounced autosave. Guard against huge datasets exceeding localStorage quota.
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      try {
+        const payload = JSON.stringify({ version: 1, savedAt: new Date().toISOString(), state });
+        // ~5MB typical localStorage; keep safety margin
+        if (payload.length > 3_500_000) return;
+        localStorage.setItem(STORAGE_KEY, payload);
+      } catch {
+        // ignore storage failures
+      }
+    }, 600);
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
+  }, [state]);
 
   const setWindData = useCallback((data: ParsedWindData | null) => setState(s => ({ ...s, windData: data })), []);
   const setWindRose = useCallback((rose: WindRoseResult | null) => setState(s => ({ ...s, windRose: rose })), []);
@@ -128,8 +165,12 @@ export const AnalysisProvider = ({ children }: { children: ReactNode }) => {
   const setHeliportReportData = useCallback((data: HeliportReportData | null) => setState(s => ({ ...s, heliportReportData: data })), []);
   const setWaterReportData = useCallback((data: WaterReportData | null) => setState(s => ({ ...s, waterReportData: data })), []);
 
+  const hydrate = useCallback((next: Partial<AnalysisState>) => {
+    setState({ ...DEFAULT_STATE, ...next });
+  }, []);
+
   return (
-    <AnalysisContext.Provider value={{ ...state, setWindData, setWindRose, setRunwayCandidates, setRunwayOptimization, setCrosswindLimit, setRunwayLength, setWaterRunway, setHelipad, setAirportReportData, setHeliportReportData, setWaterReportData }}>
+    <AnalysisContext.Provider value={{ ...state, setWindData, setWindRose, setRunwayCandidates, setRunwayOptimization, setCrosswindLimit, setRunwayLength, setWaterRunway, setHelipad, setAirportReportData, setHeliportReportData, setWaterReportData, hydrate }}>
       {children}
     </AnalysisContext.Provider>
   );

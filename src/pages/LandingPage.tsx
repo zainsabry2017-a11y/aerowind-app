@@ -100,8 +100,19 @@ const LandingPage = () => {
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-          className="text-center mb-16 max-w-2xl"
+          className="text-center mb-16 max-w-2xl flex flex-col items-center"
         >
+          <motion.div 
+            animate={{ y: [0, -12, 0] }}
+            transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
+            className="mb-8"
+          >
+            <div className="w-32 h-32 md:w-48 md:h-48 relative group">
+              <div className="absolute inset-0 bg-primary/20 blur-[50px] rounded-full opacity-50 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none" />
+              <img src="/logo.png" alt="AeroWind Logo" className="w-full h-full object-contain relative z-10 drop-shadow-[0_0_20px_rgba(8,145,178,0.3)] hover:scale-105 transition-transform duration-500" />
+            </div>
+          </motion.div>
+          
           <div className="inline-flex items-center gap-2 px-3 py-1 border border-border rounded-sm text-xs text-muted-foreground mb-6">
             <Wind className="w-3 h-3 text-primary" />
             <span className="font-mono-data">ICAO Annex 14 / GACAR Aligned</span>

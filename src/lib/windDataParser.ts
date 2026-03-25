@@ -408,3 +408,80 @@ export async function parseWindData(file: File, calmThreshold: number = 3): Prom
     warnings,
   };
 }
+
+export interface NormalizedPublicRecordLike {
+  observation_date: string;
+  observation_time: string;
+  wind_direction_deg: number | null;
+  wind_speed_kt: number | null;
+  wind_gust_kt: number | null;
+}
+
+export interface NormalizedPublicDataLike {
+  source_type: "ogimet" | "meteostat";
+  source_name: string;
+  station_name: string;
+  dateRange: { start: string; end: string } | null;
+  totalRows: number;
+  validRows: number;
+  rejectedRows: number;
+  reliabilityClass: "High" | "Moderate" | "Low";
+  warnings: string[];
+  records: NormalizedPublicRecordLike[];
+}
+
+export function parsedWindDataFromNormalizedPublicData(
+  data: NormalizedPublicDataLike,
+  calmThreshold: number = 3
+): ParsedWindData {
+  const records: WindRecord[] = data.records.map((r) => {
+    const dir = r.wind_direction_deg;
+    const spd = r.wind_speed_kt;
+    const gust = r.wind_gust_kt;
+    const isValid = dir !== null && spd !== null;
+    const windDir = dir ?? 0;
+    const windSpd = spd ?? 0;
+    const isCalm = windSpd <= calmThreshold;
+
+    return {
+      observation_date: r.observation_date,
+      observation_time: r.observation_time,
+      wind_direction_deg: windDir,
+      wind_speed_kt: windSpd,
+      wind_gust_kt: gust,
+      isCalm,
+      isValid,
+      raw: {
+        observation_date: r.observation_date,
+        observation_time: r.observation_time,
+        wind_direction_deg: String(dir ?? ""),
+        wind_speed_kt: String(spd ?? ""),
+        wind_gust_kt: String(gust ?? ""),
+      },
+    };
+  });
+
+  const reliability: ParsedWindData["reliability"] =
+    data.reliabilityClass === "High" ? "high" : data.reliabilityClass === "Moderate" ? "medium" : "low";
+
+  return {
+    records,
+    totalRows: data.totalRows,
+    validRows: data.validRows,
+    invalidRows: data.rejectedRows,
+    missingValues: 0,
+    dateRange: data.dateRange,
+    datasetType: "hourly",
+    reliability,
+    reliabilityReasons: [
+      data.reliabilityClass === "High" ? "High yield rate and consistent time-series" :
+      data.reliabilityClass === "Moderate" ? "Model-derived or partially filtered data" :
+      "Low yield rate or significant filtering/rejection",
+    ],
+    columns: { date: "observation_date", time: "observation_time", direction: "wind_direction_deg", speed: "wind_speed_kt", gust: "wind_gust_kt" },
+    warnings: data.warnings ?? [],
+    sourceType: data.source_type,
+    sourceName: data.source_name,
+    stationName: data.station_name,
+  };
+}

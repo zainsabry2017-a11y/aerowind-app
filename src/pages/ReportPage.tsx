@@ -1,13 +1,16 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import AppSidebar from "@/components/AppSidebar";
 import SectionHeader from "@/components/SectionHeader";
 import { DISCLAIMER, REGULATORY_STATEMENT, DATA_LABELS, HELIPORT_DISCLAIMER } from "@/lib/engineeringSafety";
-import { printElement, exportCSV } from "@/lib/exportUtils";
+import { exportHTMLAsPDF, printHTML, printElement, exportCSV, exportJSON } from "@/lib/exportUtils";
+import { exportEditableReportDocx } from "@/lib/reportDocxExport";
+import { buildProfessionalReportHTML } from "@/lib/reportHtmlExport";
 import { useAnalysis, type AirportReportData, type HeliportReportData, type WaterReportData } from "@/contexts/AnalysisContext";
 import { Printer, FileText, CheckSquare, Square, Settings2, BarChart4, BookOpen, Wind, Database, Download } from "lucide-react";
 import { AdvancedWindAnalysis } from "@/components/AdvancedWindAnalysis";
 import { OrientationOptimizer } from "@/components/OrientationOptimizer";
 import { renderExecutiveWindRose, renderEngineeringWindRose } from "@/lib/windRoseRenderer";
+import { useLocation } from "react-router-dom";
 
 
 // ── Helpers ──
@@ -301,7 +304,10 @@ const WaterRunwayReportBlock = ({ data, opts, numPrefix = "" }: { data: WaterRep
 const ReportPage = () => {
   const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
   
-  const { airportReportData, heliportReportData, waterReportData } = useAnalysis();
+  const analysis = useAnalysis();
+  const { airportReportData, heliportReportData, waterReportData } = analysis;
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const location = useLocation();
 
   const [reportType, setReportType] = useState<"combined" | "airport" | "heliport" | "water">("combined");
   const [opts, setOpts] = useState({
@@ -318,6 +324,15 @@ const ReportPage = () => {
     heliport: !!heliportReportData,
     water: !!waterReportData
   };
+
+  // Allow deep-linking, e.g. /report?type=heliport
+  useEffect(() => {
+    const sp = new URLSearchParams(location.search || "");
+    const type = (sp.get("type") || "").toLowerCase();
+    if (type === "airport" && hasData.airport) setReportType("airport");
+    else if (type === "heliport" && hasData.heliport) setReportType("heliport");
+    else if (type === "water" && hasData.water) setReportType("water");
+  }, [location.search, hasData.airport, hasData.heliport, hasData.water]);
 
   // ── Wind chart generator: builds wind rose + bar charts from data directly ──
   const buildWindChartsHTML = (windRose: any, orientation: number | null, cwLimit: number, label: string): string => {
@@ -431,6 +446,19 @@ const ReportPage = () => {
   };
 
   const handleWordExport = async () => {
+    await exportEditableReportDocx({
+      reportType,
+      todayLabel: today,
+      activeTitle,
+      primaryProjName,
+      primaryLoc,
+      opts,
+      airportReportData: airportReportData ?? null,
+      heliportReportData: heliportReportData ?? null,
+      waterReportData: waterReportData ?? null,
+      filename: `AeroWind_${reportType}_Report_${today.replace(/ /g, "_")}.docx`,
+    });
+    return;
     // ── 2. Helper functions for clean Word HTML ──────────────────────────────
     const th = (label: string) => `<th style="background:#f0f4f8;font-size:7.5pt;text-transform:uppercase;font-family:Courier New,monospace;letter-spacing:0.06em;padding:5pt 8pt;border:0.75pt solid #c8d0d9;font-weight:600;color:#374151;">${label}</th>`;
     const td1 = (val: string) => `<td style="padding:5pt 8pt;border:0.75pt solid #d1d5db;font-family:Courier New,monospace;font-size:8.5pt;color:#555;width:38%;">${val}</td>`;
@@ -686,14 +714,66 @@ const ReportPage = () => {
       <body>${body}</body>
       </html>`;
 
-    const blob = new Blob([fullHtml], { type: "application/msword;charset=utf-8;" });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = `AeroWind_${reportType}_Report_${today.replace(/ /g,"_")}.doc`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(link.href);
+    // (kept below for reference; unreachable due to early return)
+  };
+
+  const handlePDFExport = async () => {
+    const html = buildProfessionalReportHTML({
+      reportType,
+      todayLabel: today,
+      activeTitle,
+      primaryProjName,
+      primaryLoc,
+      opts,
+      airportReportData: airportReportData ?? null,
+      heliportReportData: heliportReportData ?? null,
+      waterReportData: waterReportData ?? null,
+    });
+    await exportHTMLAsPDF(html, `AeroWind_${reportType}_Report_${today.replace(/ /g, "_")}.pdf`);
+  };
+
+  const handlePrint = () => {
+    const html = buildProfessionalReportHTML({
+      reportType,
+      todayLabel: today,
+      activeTitle,
+      primaryProjName,
+      primaryLoc,
+      opts,
+      airportReportData: airportReportData ?? null,
+      heliportReportData: heliportReportData ?? null,
+      waterReportData: waterReportData ?? null,
+    });
+    printHTML(html);
+  };
+
+  const handleExportJSON = () => {
+    exportJSON(`AeroWind_Analysis_${today.replace(/ /g, "_")}.json`, {
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      state: {
+        windData: analysis.windData,
+        windRose: analysis.windRose,
+        runwayCandidates: analysis.runwayCandidates,
+        runwayOptimization: analysis.runwayOptimization,
+        crosswindLimit: analysis.crosswindLimit,
+        runwayLength: analysis.runwayLength,
+        runwayLengthInputs: analysis.runwayLengthInputs,
+        waterRunway: analysis.waterRunway,
+        helipad: analysis.helipad,
+        airportReportData: analysis.airportReportData,
+        heliportReportData: analysis.heliportReportData,
+        waterReportData: analysis.waterReportData,
+      },
+    });
+  };
+
+  const handleImportJSONFile = async (file: File) => {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const next = (parsed && typeof parsed === "object" ? (parsed as any).state : null) as any;
+    if (!next || typeof next !== "object") throw new Error("Invalid JSON: missing 'state'.");
+    analysis.hydrate(next);
   };
 
 
@@ -715,13 +795,39 @@ const ReportPage = () => {
           action={
             <div className="flex gap-2">
               <button onClick={handleWordExport} className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-primary text-primary hover:bg-primary hover:text-primary-foreground rounded-sm transition-all shadow-sm">
-                <FileText className="w-4 h-4" /> Word (.doc)
+                <FileText className="w-4 h-4" /> Word (.docx)
               </button>
-              <button onClick={() => printElement("report-content")} className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-sm transition-all shadow-custom">
-                <Printer className="w-4 h-4" /> Print / PDF
+              <button onClick={handlePDFExport} className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-sm transition-all shadow-custom">
+                <Download className="w-4 h-4" /> PDF
+              </button>
+              <button onClick={handleExportJSON} className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-border text-foreground/80 hover:bg-secondary/30 rounded-sm transition-all shadow-sm">
+                <Download className="w-4 h-4" /> JSON
+              </button>
+              <button onClick={() => importInputRef.current?.click()} className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-border text-foreground/80 hover:bg-secondary/30 rounded-sm transition-all shadow-sm">
+                <Download className="w-4 h-4" /> Import
+              </button>
+              <button onClick={handlePrint} className="inline-flex items-center gap-2 px-4 py-2 text-sm border border-border text-foreground/80 hover:bg-secondary/30 rounded-sm transition-all shadow-sm">
+                <Printer className="w-4 h-4" /> Print
               </button>
             </div>
           }
+        />
+
+        <input
+          ref={importInputRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            e.target.value = "";
+            try {
+              await handleImportJSONFile(file);
+            } catch (err: any) {
+              alert(err?.message || "Failed to import JSON");
+            }
+          }}
         />
 
         {(() => {

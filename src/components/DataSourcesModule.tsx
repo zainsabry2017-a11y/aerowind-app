@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import InstrumentCard from "./InstrumentCard";
 import FileUploadZone from "./FileUploadZone";
 import DataValidationReport from "./DataValidationReport";
-import type { ParsedWindData } from "@/lib/windDataParser";
+import { parsedWindDataFromNormalizedPublicData, type ParsedWindData } from "@/lib/windDataParser";
 import { parsePublicData, fetchAndParseMeteostat, type NormalizedPublicData } from "@/lib/publicWeatherParser";
 import { Download, Database, CheckCircle2, MapPin } from "lucide-react";
 import { STATION_DATABASE, type WeatherStation } from "@/data/stationsDatabase";
+import CoordinatePickerMap from "@/components/CoordinatePickerMap";
+import WindDataQADashboard from "@/components/WindDataQADashboard";
 
 interface DataSourcesModuleProps {
   onFile: (file: File) => void;
@@ -32,10 +34,46 @@ export default function DataSourcesModule({ onFile, parsedData, isLoading, error
   const [metStartDate, setMetStartDate] = useState("");
   const [metEndDate, setMetEndDate] = useState("");
   const [metText, setMetText] = useState("");
+  const [metStationQuery, setMetStationQuery] = useState("");
+  const [metStationResultsOpen, setMetStationResultsOpen] = useState(false);
 
   const [publicParsedData, setPublicParsedData] = useState<NormalizedPublicData | null>(null);
   const [publicParsing, setPublicParsing] = useState(false);
   const [publicError, setPublicError] = useState<string | null>(null);
+
+  // Provide a safe default fetch window (last 365 days) when user switches to Meteostat branch.
+  useEffect(() => {
+    if (provider !== "meteostat") return;
+    if (metStartDate && metEndDate) return;
+    const today = new Date();
+    const end = new Date(today);
+    const start = new Date(today);
+    start.setDate(start.getDate() - 365);
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    if (!metEndDate) setMetEndDate(fmt(end));
+    if (!metStartDate) setMetStartDate(fmt(start));
+  }, [provider, metStartDate, metEndDate]);
+
+  const metLatLonParsed = useMemo(() => {
+    if (!metLatLon || !metLatLon.includes(",")) return null;
+    const [a, b] = metLatLon.split(",");
+    const lat = parseFloat(a.trim());
+    const lon = parseFloat(b.trim());
+    if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon };
+    return null;
+  }, [metLatLon]);
+
+  const metStationMatches = useMemo(() => {
+    const q = metStationQuery.trim().toLowerCase();
+    if (!q) return [];
+    const candidates = STATION_DATABASE.filter((s) => s.source_type === "both" || s.source_type === "meteostat");
+    return candidates
+      .filter((s) => {
+        const hay = `${s.id} ${s.name} ${s.country}`.toLowerCase();
+        return hay.includes(q);
+      })
+      .slice(0, 12);
+  }, [metStationQuery]);
 
   // Geo-locator States
   const [locatorResults, setLocatorResults] = useState<(WeatherStation & { distance: number })[]>([]);
@@ -43,7 +81,7 @@ export default function DataSourcesModule({ onFile, parsedData, isLoading, error
   const [locatorActiveMode, setLocatorActiveMode] = useState<"ogimet" | "meteostat" | null>(null);
   const [selectedStationId, setSelectedStationId] = useState<string | null>(null);
 
-  const handleLocateStations = (sourceType: "ogimet" | "meteostat") => {
+  const handleLocateStations = (sourceType: "ogimet" | "meteostat", autoApplyNearest: boolean = false) => {
     setLocatorError("");
     setLocatorResults([]);
     setLocatorActiveMode(sourceType);
@@ -115,7 +153,11 @@ export default function DataSourcesModule({ onFile, parsedData, isLoading, error
       distance: calculateDistance(lat, lon, s.lat, s.lon)
     })).sort((a, b) => a.distance - b.distance);
     
-    setLocatorResults(distances.slice(0, 3));
+    const top = distances.slice(0, 3);
+    setLocatorResults(top);
+    if (autoApplyNearest && top[0]) {
+      handleApplyStation(top[0], sourceType);
+    }
   };
 
   const handleSelectStation = (st: WeatherStation & { distance: number }, mode: "ogimet" | "meteostat") => {
@@ -130,6 +172,19 @@ export default function DataSourcesModule({ onFile, parsedData, isLoading, error
     }
     setSelectedStationId(st.id);
     // Keep list visible so user can see the selection was applied
+  };
+
+  const handleApplyStation = (st: WeatherStation, mode: "ogimet" | "meteostat") => {
+    if (mode === "ogimet") {
+      setOgiIcao(st.id);
+      setOgiStation(`${st.name}`);
+      setOgiLatLon(`${st.lat.toFixed(4)}, ${st.lon.toFixed(4)}`);
+    } else {
+      setMetCity(`${st.name}`);
+      setMetCountry(st.country);
+      setMetLatLon(`${st.lat.toFixed(4)}, ${st.lon.toFixed(4)}`);
+    }
+    setSelectedStationId(st.id);
   };
 
   // ── Inline station results renderer (plain function, NOT a React component)
@@ -210,31 +265,7 @@ export default function DataSourcesModule({ onFile, parsedData, isLoading, error
       }
     }
 
-    const converted: ParsedWindData = {
-      records: publicParsedData.records.map((r: any) => ({
-        observation_date: r.observation_date,
-        observation_time: r.observation_time,
-        wind_direction_deg: r.wind_direction_deg ?? 0,
-        wind_speed_kt: r.wind_speed_kt ?? 0,
-        wind_gust_kt: r.wind_gust_kt,
-        isCalm: (r.wind_speed_kt ?? 0) === 0,
-        isValid: true,
-        raw: {}
-      })),
-      totalRows: publicParsedData.totalRows,
-      validRows: publicParsedData.validRows,
-      invalidRows: publicParsedData.rejectedRows,
-      missingValues: 0,
-      dateRange: publicParsedData.dateRange,
-      datasetType: "unknown",
-      reliability: publicParsedData.reliabilityClass === "High" ? "high" : publicParsedData.reliabilityClass === "Moderate" ? "medium" : "low",
-      reliabilityReasons: publicParsedData.warnings,
-      columns: { date: "date", time: "time", direction: "dir", speed: "spd", gust: "gst" },
-      warnings: [`Source: ${publicParsedData.source_name} (${publicParsedData.station_name})`, "⚠ Public data is for planning support only. Official meteorological data remains preferred for formal reporting."],
-      sourceType: publicParsedData.source_type,
-      sourceName: publicParsedData.source_name,
-      stationName: publicParsedData.station_name
-    };
+    const converted: ParsedWindData = parsedWindDataFromNormalizedPublicData(publicParsedData, 3);
 
     if (onDataAccepted) {
       onDataAccepted(converted);
@@ -444,6 +475,42 @@ export default function DataSourcesModule({ onFile, parsedData, isLoading, error
               ⚠ Early-Stage Planning Only. Public weather models interpolate data and may hallucinate localized phenomena.
             </div>
 
+            <div className="border border-border rounded-sm p-3 space-y-2">
+              <label className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground">Search station (ICAO / city)</label>
+              <input
+                type="text"
+                value={metStationQuery}
+                onChange={(e) => { setMetStationQuery(e.target.value); setMetStationResultsOpen(true); }}
+                onFocus={() => setMetStationResultsOpen(true)}
+                placeholder="e.g. OERK, KJFK, Heathrow, Riyadh..."
+                className="w-full bg-transparent border-b border-border focus:border-primary outline-none py-1 text-sm"
+              />
+              {metStationResultsOpen && metStationMatches.length > 0 && (
+                <div className="mt-2 border border-border rounded-sm overflow-hidden">
+                  {metStationMatches.map((s) => (
+                    <button
+                      key={s.id}
+                      onClick={() => {
+                        handleApplyStation(s, "meteostat");
+                        setMetStationResultsOpen(false);
+                        setMetStationQuery(`${s.name} (${s.id})`);
+                      }}
+                      className="w-full text-left px-3 py-2 text-[11px] hover:bg-secondary/30 border-b border-border last:border-b-0"
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="font-medium text-foreground truncate">{s.name}</span>
+                        <span className="text-[10px] font-mono-data text-primary shrink-0">{s.id}</span>
+                      </div>
+                      <div className="text-[10px] font-mono-data text-muted-foreground">{s.country} • {s.lat.toFixed(3)}, {s.lon.toFixed(3)}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <p className="text-[10px] text-muted-foreground">
+                Pick a station to auto-fill coordinates, then click <strong>Auto-Fetch</strong>.
+              </p>
+            </div>
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <div className="col-span-2 md:col-span-2 border border-border rounded-sm p-3 space-y-1">
                 <label className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground">Station / City</label>
@@ -457,6 +524,21 @@ export default function DataSourcesModule({ onFile, parsedData, isLoading, error
                 <label className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground">Lat / Lon (Opt)</label>
                 <input type="text" value={metLatLon} onChange={e => setMetLatLon(e.target.value)} placeholder="51.4,-0.4" className="w-full bg-transparent border-b border-border focus:border-primary outline-none py-1 text-sm font-mono-data" />
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <span className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground block">Pick coordinates on map (optional)</span>
+              <CoordinatePickerMap
+                value={metLatLonParsed}
+                onChange={(p) => {
+                  setMetLatLon(`${p.lat.toFixed(4)}, ${p.lon.toFixed(4)}`);
+                  // Auto-detect nearest station immediately after click.
+                  setTimeout(() => handleLocateStations("meteostat", true), 0);
+                }}
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Map tiles by OpenStreetMap. Click anywhere to set Lat/Lon.
+              </p>
             </div>
 
             <div className="flex justify-end mt-1">
@@ -577,6 +659,7 @@ export default function DataSourcesModule({ onFile, parsedData, isLoading, error
 
       {/* Validation Report Mount */}
       {parsedData && <DataValidationReport data={parsedData} />}
+      {parsedData && <WindDataQADashboard data={parsedData} />}
     </div>
   );
 }

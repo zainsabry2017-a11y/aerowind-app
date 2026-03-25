@@ -11,13 +11,16 @@ import CrosswindCalculator from "@/components/CrosswindCalculator";
 import ApproachAdvisor from "@/components/ApproachAdvisor";
 import HelipadUsability from "@/components/HelipadUsability";
 import { AeroInput, AeroSelect } from "@/components/AeroInput";
-import { parseWindData, type ParsedWindData } from "@/lib/windDataParser";
+import { parseWindData, parsedWindDataFromNormalizedPublicData, type ParsedWindData } from "@/lib/windDataParser";
 import { calculateWindRose, DEFAULT_WIND_ROSE_OPTIONS, type WindRoseResult } from "@/lib/windRoseCalculator";
 import { generateSafetyWarnings, DATA_LABELS, getConfidenceLevel } from "@/lib/engineeringSafety";
 import { renderExecutiveWindRose, renderEngineeringWindRose } from "@/lib/windRoseRenderer";
 import { exportCSV, exportSVGAsPNG } from "@/lib/exportUtils";
 import { loadSampleDataAsFile, downloadSampleCSV, SAMPLE_PRESETS } from "@/lib/sampleDataGenerator";
 import { useAnalysis } from "@/contexts/AnalysisContext";
+import { fetchAndParseMeteostat } from "@/lib/publicWeatherParser";
+import { applyWindAdjustments } from "@/lib/windAdjustments";
+import CoordinatePickerMap from "@/components/CoordinatePickerMap";
 import { Wind, Download, Database } from "lucide-react";
 
 const WindRosePage = () => {
@@ -33,6 +36,18 @@ const WindRosePage = () => {
   const [showSamplePanel, setShowSamplePanel] = useState(false);
   const svgContainerRef = useRef<HTMLDivElement>(null);
 
+  const [adjEnabled, setAdjEnabled] = useState(false);
+  const [adjDirOffset, setAdjDirOffset] = useState("0");
+  const [adjSpdOffset, setAdjSpdOffset] = useState("0");
+
+  const [showPublicPanel, setShowPublicPanel] = useState(false);
+  const [publicCity, setPublicCity] = useState("");
+  const [publicCountry, setPublicCountry] = useState("");
+  const [publicLat, setPublicLat] = useState("");
+  const [publicLon, setPublicLon] = useState("");
+  const [publicStart, setPublicStart] = useState("");
+  const [publicEnd, setPublicEnd] = useState("");
+
   const handleFile = useCallback(async (file: File) => {
     setLoading(true);
     setError(null);
@@ -45,6 +60,24 @@ const WindRosePage = () => {
       setLoading(false);
     }
   }, [calmThreshold]);
+
+  const handleFetchPublic = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const lat = parseFloat(publicLat);
+      const lon = parseFloat(publicLon);
+      const latlon = !isNaN(lat) && !isNaN(lon) ? `${lat},${lon}` : "";
+      const result = await fetchAndParseMeteostat(publicCity.trim(), publicCountry.trim(), latlon, publicStart.trim(), publicEnd.trim());
+      const converted = parsedWindDataFromNormalizedPublicData(result, parseFloat(calmThreshold) || 3);
+      setParsedData(converted);
+      setShowPublicPanel(false);
+    } catch (err: any) {
+      setError(err.message || "Failed to fetch public data");
+    } finally {
+      setLoading(false);
+    }
+  }, [publicLat, publicLon, publicCity, publicCountry, publicStart, publicEnd, calmThreshold]);
 
   const handleLoadSample = useCallback(async (presetIndex: number) => {
     const preset = SAMPLE_PRESETS[presetIndex];
@@ -59,9 +92,22 @@ const WindRosePage = () => {
     if (preset) downloadSampleCSV(preset.config);
   }, []);
 
-  const windRose = useMemo<WindRoseResult | null>(() => {
+  const effectiveParsedData = useMemo<ParsedWindData | null>(() => {
     if (!parsedData) return null;
-    return calculateWindRose(parsedData.records, {
+    const calm = parseFloat(calmThreshold) || 3;
+    const records = applyWindAdjustments(parsedData.records, calm, {
+      enabled: adjEnabled,
+      directionOffsetDeg: parseFloat(adjDirOffset) || 0,
+      speedOffsetKt: parseFloat(adjSpdOffset) || 0,
+      clampSpeedMinKt: 0,
+    });
+    if (records === parsedData.records) return parsedData;
+    return { ...parsedData, records };
+  }, [parsedData, calmThreshold, adjEnabled, adjDirOffset, adjSpdOffset]);
+
+  const windRose = useMemo<WindRoseResult | null>(() => {
+    if (!effectiveParsedData) return null;
+    return calculateWindRose(effectiveParsedData.records, {
       ...DEFAULT_WIND_ROSE_OPTIONS,
       sectorSize: parseFloat(sectorType),
       calmThreshold: parseFloat(calmThreshold) || 3,
@@ -69,14 +115,14 @@ const WindRosePage = () => {
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
     });
-  }, [parsedData, sectorType, calmThreshold, useGust, monthFilter]);
+  }, [effectiveParsedData, sectorType, calmThreshold, useGust, monthFilter]);
 
   // Sync to shared analysis context
-  useEffect(() => { analysis.setWindData(parsedData); }, [parsedData]);
+  useEffect(() => { analysis.setWindData(effectiveParsedData); }, [effectiveParsedData]);
   useEffect(() => { analysis.setWindRose(windRose); }, [windRose]);
 
-  const warnings = useMemo(() => generateSafetyWarnings(parsedData), [parsedData]);
-  const confidence = parsedData ? getConfidenceLevel(parsedData.reliability) : null;
+  const warnings = useMemo(() => generateSafetyWarnings(effectiveParsedData), [effectiveParsedData]);
+  const confidence = effectiveParsedData ? getConfidenceLevel(effectiveParsedData.reliability) : null;
 
   const svgString = useMemo(() => {
     if (!windRose) return "";
@@ -185,14 +231,69 @@ const WindRosePage = () => {
                 )}
               </div>
 
-              {parsedData && (
+              {/* Public Data Fetch (Open Source) */}
+              <div className="mt-3 pt-3 border-t border-border">
+                <button
+                  onClick={() => setShowPublicPanel(!showPublicPanel)}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-xs border border-border rounded-sm hover:border-primary/50 hover:bg-secondary/30 transition-colors"
+                >
+                  <Database className="w-3.5 h-3.5 text-primary" />
+                  <span className="text-foreground">Fetch Open Data</span>
+                  <span className="text-muted-foreground ml-auto text-[10px]">Open‑Meteo archive</span>
+                </button>
+
+                {showPublicPanel && (
+                  <div className="mt-2 space-y-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      <AeroInput label="Latitude" placeholder="24.7136" value={publicLat} onChange={setPublicLat} />
+                      <AeroInput label="Longitude" placeholder="46.6753" value={publicLon} onChange={setPublicLon} />
+                    </div>
+
+                    <CoordinatePickerMap
+                      value={
+                        publicLat && publicLon && !isNaN(parseFloat(publicLat)) && !isNaN(parseFloat(publicLon))
+                          ? { lat: parseFloat(publicLat), lon: parseFloat(publicLon) }
+                          : null
+                      }
+                      onChange={(p) => {
+                        setPublicLat(p.lat.toFixed(6));
+                        setPublicLon(p.lon.toFixed(6));
+                      }}
+                    />
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <AeroInput label="Start Date" placeholder="2025-01-01" value={publicStart} onChange={setPublicStart} />
+                      <AeroInput label="End Date" placeholder="2025-12-31" value={publicEnd} onChange={setPublicEnd} />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <AeroInput label="City (optional)" placeholder="Riyadh" value={publicCity} onChange={setPublicCity} />
+                      <AeroInput label="Country (optional)" placeholder="SA" value={publicCountry} onChange={setPublicCountry} />
+                    </div>
+
+                    <button
+                      onClick={handleFetchPublic}
+                      disabled={loading}
+                      className="w-full text-[10px] py-2 bg-primary text-primary-foreground rounded-sm hover:bg-primary/90 transition-colors disabled:opacity-30"
+                    >
+                      Fetch & Analyze
+                    </button>
+
+                    <p className="text-[10px] text-muted-foreground">
+                      Uses Open‑Meteo Archive (public model grid). Suitable for planning; prefer certified station data for final engineering.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {effectiveParsedData && (
                 <div className="mt-3 space-y-2">
-                  <DataReliabilityBadge level={parsedData.reliability} reasons={parsedData.reliabilityReasons} />
+                  <DataReliabilityBadge level={effectiveParsedData.reliability} reasons={effectiveParsedData.reliabilityReasons} />
                   <div className="text-[10px] text-muted-foreground space-y-1 font-mono-data">
-                    <p>Records: {parsedData.validRows.toLocaleString()} valid / {parsedData.totalRows.toLocaleString()} total</p>
-                    <p>Type: {parsedData.datasetType}</p>
-                    {parsedData.dateRange && <p>Range: {parsedData.dateRange.start} → {parsedData.dateRange.end}</p>}
-                    <p>Invalid: {parsedData.invalidRows} | Missing: {parsedData.missingValues}</p>
+                    <p>Records: {effectiveParsedData.validRows.toLocaleString()} valid / {effectiveParsedData.totalRows.toLocaleString()} total</p>
+                    <p>Type: {effectiveParsedData.datasetType}</p>
+                    {effectiveParsedData.dateRange && <p>Range: {effectiveParsedData.dateRange.start} → {effectiveParsedData.dateRange.end}</p>}
+                    <p>Invalid: {effectiveParsedData.invalidRows} | Missing: {effectiveParsedData.missingValues}</p>
                   </div>
                   {prevailingWind && (
                     <div className="border-t border-border pt-2 mt-2">
@@ -226,6 +327,27 @@ const WindRosePage = () => {
                     label: new Date(2000, i).toLocaleString("en", { month: "long" }),
                   })),
                 ]} />
+
+                <div className="pt-3 border-t border-border">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Adjust Wind Data</span>
+                    <button
+                      onClick={() => setAdjEnabled((v) => !v)}
+                      className={`text-[10px] px-2 py-1 rounded-sm border transition-colors ${
+                        adjEnabled ? "border-primary/40 text-primary bg-primary/10" : "border-border text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {adjEnabled ? "Enabled" : "Disabled"}
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 mt-2">
+                    <AeroInput label="Dir Offset" placeholder="0" unit="°" value={adjDirOffset} onChange={setAdjDirOffset} />
+                    <AeroInput label="Speed Offset" placeholder="0" unit="KT" value={adjSpdOffset} onChange={setAdjSpdOffset} />
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-2">
+                    This modifies imported wind records (direction wrap 0–359, speed clamped ≥0) before analysis. Core equations stay unchanged.
+                  </p>
+                </div>
               </div>
             </InstrumentCard>
           </div>

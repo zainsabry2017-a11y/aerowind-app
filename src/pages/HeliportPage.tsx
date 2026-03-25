@@ -42,6 +42,8 @@ import { exportCSV } from "@/lib/exportUtils";
 import { useAnalysis } from "@/contexts/AnalysisContext";
 import { Wind, Download, Database, ChevronRight, ChevronLeft, CheckCircle2 } from "lucide-react";
 import DataSourcesModule from "@/components/DataSourcesModule";
+import ScenarioComparison from "@/components/ScenarioComparison";
+import { useNavigate } from "react-router-dom";
 
 type UnitMode = "metric" | "imperial";
 
@@ -70,7 +72,14 @@ const OLS_ROWS = [
 const HeliportPage = () => {
   const [activeTab, setActiveTab] = useState<TabId>("project");
   const tabIdx = TABS.findIndex((t) => t.id === activeTab);
-  const goNext = () => setActiveTab(TABS[Math.min(tabIdx + 1, TABS.length - 1)].id);
+  const navigate = useNavigate();
+  const goNext = () => {
+    if (tabIdx >= TABS.length - 1) {
+      navigate("/report?type=heliport");
+      return;
+    }
+    setActiveTab(TABS[Math.min(tabIdx + 1, TABS.length - 1)].id);
+  };
   const goPrev = () => setActiveTab(TABS[Math.max(tabIdx - 1, 0)].id);
 
   const { heliportReportData, setHeliportReportData } = useAnalysis();
@@ -485,6 +494,12 @@ const HeliportPage = () => {
                           <p className="text-xs text-muted-foreground">Total Observations</p>
                         </div>
                       </div>
+                      <ScenarioComparison
+                        records={records}
+                        sectorSizeDeg={parseFloat(sectorType) || 22.5}
+                        monthFilter={monthFilter === "all" ? null : [parseInt(monthFilter)]}
+                        useGust={useGust}
+                      />
                     </>
                   ) : (
                     <div className="flex flex-col items-center justify-center h-48 border border-border rounded-sm text-muted-foreground text-sm gap-2">
@@ -1194,10 +1209,10 @@ const HeliportPage = () => {
 
           <button
             onClick={goNext}
-            disabled={tabIdx === TABS.length - 1}
+            disabled={false}
             className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-primary text-primary-foreground rounded-sm hover:bg-primary/90 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            {tabIdx < TABS.length - 1 ? TABS[tabIdx + 1].label : "Done"}
+            {tabIdx < TABS.length - 1 ? TABS[tabIdx + 1].label : "Reports Center"}
             <ChevronRight className="w-4 h-4" />
           </button>
         </div>
