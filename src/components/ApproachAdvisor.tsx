@@ -62,8 +62,8 @@ const ApproachAdvisor = ({ windRose, mode = "airport", onAnalysis }: ApproachAdv
     const prev = computePrevailing(windRose);
     if (!prev) return null;
 
-    // Preferred approach = INTO the wind (reciprocal of prevailing)
-    const approachDir = (prev.vectorMeanDir + 180) % 360;
+    // Meteorological wind = direction wind comes FROM. Inbound track with headwind matches that heading.
+    const approachDir = prev.vectorMeanDir;
 
     // Recommended runway heading aligned with prevailing wind
     const rwHeading = prev.vectorMeanDir <= 180 ? prev.vectorMeanDir : prev.vectorMeanDir - 180;
@@ -92,7 +92,7 @@ const ApproachAdvisor = ({ windRose, mode = "airport", onAnalysis }: ApproachAdv
       peakLabel: prev.peakLabel,
       peakFreq: prev.peakFreq,
       approachDir,
-      approachLabel: getCardinal(approachDir),
+      approachLabel: getCardinal(prev.vectorMeanDir),
       rwHeading,
       rwReciprocal,
       rwyDesignator: `${String(rwyNum1).padStart(2, "0")}/${String(rwyNum2).padStart(2, "0")}`,
@@ -123,13 +123,13 @@ const ApproachAdvisor = ({ windRose, mode = "airport", onAnalysis }: ApproachAdv
       <div className="space-y-4">
         {/* Prevailing Wind */}
         <div className="space-y-1">
-          <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Prevailing Wind Direction</p>
+          <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Resultant Wind (vector mean)</p>
           <div className="flex items-baseline gap-2">
             <span className="text-2xl font-display text-foreground">{formatHeading(analysis.prevailingDir)}°</span>
-            <span className="text-sm text-muted-foreground">({analysis.prevailingLabel})</span>
+            <span className="text-sm text-muted-foreground">({analysis.prevailingLabel}) wind from</span>
           </div>
           <p className="text-[10px] text-muted-foreground font-mono-data">
-            Peak sector: {analysis.peakLabel} ({analysis.peakDir}°) — {analysis.peakFreq.toFixed(1)}% of observations
+            Peak sector (mode): {analysis.peakLabel} ({analysis.peakDir}°) — {analysis.peakFreq.toFixed(1)}% of observations. Can differ from vector mean when several sectors contribute.
           </p>
         </div>
 
@@ -161,9 +161,7 @@ const ApproachAdvisor = ({ windRose, mode = "airport", onAnalysis }: ApproachAdv
               <span className="text-sm text-muted-foreground">({analysis.approachLabel})</span>
             </div>
             <p className="text-[10px] text-muted-foreground mt-1">
-              {mode === "airport" 
-                ? "Approach into the prevailing wind — applies to both runway and helipad operations"
-                : "Approach into the prevailing wind — primary approach and departure path"}
+              Published wind direction is where the wind comes from; flying this inbound heading gives a headwind component along the approach path.
             </p>
           </div>
         </div>

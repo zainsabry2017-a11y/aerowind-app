@@ -34,6 +34,29 @@ export interface OptimizationResult {
   top5: { heading: number; usability: number }[];
 }
 
+// ── Approach / FATO alignment helpers ──────────────────
+// Wind direction is reported as where the wind comes FROM. A headwind approach uses the
+// same published heading (flying toward that direction), not reciprocal +180°.
+
+export function smallestAngleDifferenceDeg(a: number, b: number): number {
+  let d = Math.abs((((a - b) % 360) + 360) % 360);
+  if (d > 180) d = 360 - d;
+  return d;
+}
+
+/**
+ * Optimizer returns runway/FATO axis as a 1–180° “low” designator. Pick the physical
+ * end whose inbound track is closest to wind-from for a headwind approach.
+ */
+export function inboundHeadingForHeadwind(windFromDeg: number, axisRunwayHeading1to180: number): number {
+  const raw = ((Math.round(axisRunwayHeading1to180) % 360) + 360) % 360;
+  const low = raw > 180 ? raw - 180 : raw || 360;
+  const a = low;
+  const b = (low + 180) % 360;
+  const w = ((windFromDeg % 360) + 360) % 360;
+  return smallestAngleDifferenceDeg(a, w) <= smallestAngleDifferenceDeg(b, w) ? a : b;
+}
+
 // ── Wind component calculation ─────────────────────────
 
 export function calculateWindComponents(
@@ -55,7 +78,8 @@ export function calculateRunwayUsability(
   records: WindRecord[],
   runwayHeading: number,
   crosswindLimit: number,
-  calmThreshold: number = 3
+  calmThreshold: number = 3,
+  useGust: boolean = false
 ): RunwayUsabilityResult {
   const reciprocal = (runwayHeading + 180) % 360;
   const validRecords = records.filter((r) => r.isValid);
@@ -67,14 +91,15 @@ export function calculateRunwayUsability(
   let tailwindCount = 0;
 
   for (const r of validRecords) {
-    if (r.wind_speed_kt <= calmThreshold || r.isCalm) {
+    const windSpd = useGust && r.wind_gust_kt !== null ? r.wind_gust_kt : r.wind_speed_kt;
+    if (windSpd <= calmThreshold) {
       calmObs++;
       continue;
     }
 
     // Check both runway ends — use the one with lower crosswind
-    const comp1 = calculateWindComponents(r.wind_direction_deg, r.wind_speed_kt, runwayHeading);
-    const comp2 = calculateWindComponents(r.wind_direction_deg, r.wind_speed_kt, reciprocal);
+    const comp1 = calculateWindComponents(r.wind_direction_deg, windSpd, runwayHeading);
+    const comp2 = calculateWindComponents(r.wind_direction_deg, windSpd, reciprocal);
 
     const bestComp = comp1.crosswind <= comp2.crosswind ? comp1 : comp2;
 
@@ -113,12 +138,13 @@ export function optimizeRunwayOrientation(
   records: WindRecord[],
   crosswindLimit: number,
   calmThreshold: number = 3,
+  useGust: boolean = false,
   stepDegrees: number = 1
 ): OptimizationResult {
   const results: RunwayUsabilityResult[] = [];
 
   for (let heading = 1; heading <= 180; heading += stepDegrees) {
-    const result = calculateRunwayUsability(records, heading, crosswindLimit, calmThreshold);
+    const result = calculateRunwayUsability(records, heading, crosswindLimit, calmThreshold, useGust);
     results.push(result);
   }
 

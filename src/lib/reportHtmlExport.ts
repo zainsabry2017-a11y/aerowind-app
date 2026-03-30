@@ -1,5 +1,13 @@
 import type { AirportReportData, HeliportReportData, WaterReportData } from "@/contexts/AnalysisContext";
 import { renderExecutiveWindRose } from "@/lib/windRoseRenderer";
+import { runwayCrosswindReportLabel, effectiveRunwayCrosswindKt } from "@/lib/runwayReportCrosswind";
+import {
+  computeSpeedDistributionRows,
+  computeCrosswindAnalysis,
+  heliportPerfClassDefaultXw,
+} from "@/lib/reportWindAnalysisTables";
+import type { WindRecord } from "@/lib/windDataParser";
+import { DEFAULT_WIND_ROSE_OPTIONS } from "@/lib/windRoseCalculator";
 
 type ReportType = "combined" | "airport" | "heliport" | "water";
 
@@ -103,12 +111,53 @@ const simpleTable = (headers: string[], rows: string[][]) => {
   `;
 };
 
-function windFiguresHTML(label: string, windRose: any) {
+export type WindFiguresAnalysisContext = {
+  records: WindRecord[];
+  orientation: number | null;
+  cwLimit: number;
+  mode: "airport" | "heliport" | "water";
+  calmThresholdKts?: number;
+  useGust?: boolean;
+};
+
+function windFiguresHTML(label: string, windRose: any, analysisCtx?: WindFiguresAnalysisContext | null) {
   if (!windRose) return `<p class="muted">No wind data available for ${esc(label)}.</p>`;
   const windRoseSvg = renderExecutiveWindRose(windRose, { size: 520 });
   const windRoseUri = svgToDataUri(windRoseSvg);
   const speedSvg = speedDistSvgFromWindRose(windRose);
   const speedUri = svgToDataUri(speedSvg);
+
+  const freqRows: string[][] = (windRose.bins ?? []).map((b: any) => {
+    const obs = b.speedBins?.reduce((s: number, sp: any) => s + sp.count, 0) || 0;
+    return [String(b.label), `${b.directionCenter}°`, `${b.totalFrequency.toFixed(1)}`, obs.toLocaleString()];
+  });
+
+  const speedTableRows = computeSpeedDistributionRows(windRose).map((r) => [
+    r.label,
+    String(r.count),
+    r.freq.toFixed(2),
+  ]);
+
+  const crosswind =
+    analysisCtx && analysisCtx.records.length > 0
+      ? computeCrosswindAnalysis(analysisCtx.records, analysisCtx.orientation, analysisCtx.cwLimit, {
+          mode: analysisCtx.mode,
+          calmThresholdKts: analysisCtx.calmThresholdKts,
+          useGust: analysisCtx.useGust,
+        })
+      : null;
+
+  const crosswindSection =
+    crosswind && analysisCtx
+      ? `
+    <h3>Crosswind Analysis</h3>
+    <p class="muted">Crosswind limit (analysis): ${esc(String(analysisCtx.cwLimit))} kt. Valid observations within limit: ${crosswind.coverage.toFixed(1)}% (n = ${crosswind.totalValid.toLocaleString()}).</p>
+    ${simpleTable(
+      ["Crosswind range", "Count", "Frequency (%)"],
+      crosswind.bins.map((b) => [b.label, String(b.count), b.freq.toFixed(2)])
+    )}
+  `
+      : "";
 
   return `
     <h3>Wind Analysis — ${esc(label)}</h3>
@@ -118,10 +167,15 @@ function windFiguresHTML(label: string, windRose: any) {
         ${windRoseUri ? `<img class="img" src="${windRoseUri}" alt="Wind Rose"/>` : ""}
       </div>
       <div class="figure">
-        <div class="cap">Speed Distribution</div>
+        <div class="cap">Speed Distribution (chart)</div>
         ${speedUri ? `<img class="img" src="${speedUri}" alt="Speed Distribution"/>` : ""}
       </div>
     </div>
+    <h3>Wind Frequency by Direction</h3>
+    ${simpleTable(["Direction", "Center (°)", "Frequency (%)", "Observations"], freqRows)}
+    <h3>Speed Distribution</h3>
+    ${simpleTable(["Speed range", "Count", "Frequency (%)"], speedTableRows)}
+    ${crosswindSection}
   `;
 }
 
@@ -176,7 +230,7 @@ export function buildProfessionalReportHTML(args: {
     body += kvTable([
       ["Project", d.projName || "—"],
       ["Location", d.projLoc || "—"],
-      ["Elevation", v(d.elevation, " m AMSL")],
+      ["Elevation", v(d.elevation, " m MSL")],
       ["Reference Temperature", v(d.refTemp, " °C")],
       ["Effective Gradient", v(d.gradient, "%")],
       ["Aerodrome Code", v(d.aeroCode)],
@@ -185,7 +239,7 @@ export function buildProfessionalReportHTML(args: {
     body += kvTable([
       ["Prevailing Wind", prevailingBin ? `${prevailingBin.label} (${prevailingBin.directionCenter}°)` : "—"],
       ["Calm Frequency", d.windRose ? `${d.windRose.calmFrequency.toFixed(2)}%` : "—"],
-      ["Crosswind Limit", v(d.xwLimit, " kt")],
+      ["Crosswind limit (analysis)", runwayCrosswindReportLabel(d.xwLimit, { crosswindIsCustom: d.crosswindIsCustom, crosswindPreset: d.crosswindPreset })],
       ["Optimal Orientation", d.optimization ? `${String(d.optimization.bestHeading).padStart(3, "0")}° / ${String((d.optimization.bestHeading + 180) % 360 || 360).padStart(3, "0")}°` : "—"],
       ["Max Usability Achieved", d.optimization ? `${d.optimization.bestUsability.toFixed(2)}%` : "—"],
     ]);
@@ -213,7 +267,14 @@ export function buildProfessionalReportHTML(args: {
     } else {
       body += `<p class="muted">No runway length analysis performed.</p>`;
     }
-    if (opts.includeFigures) body += windFiguresHTML("Airport", d.windRose);
+    if (opts.includeFigures) {
+      body += windFiguresHTML("Airport", d.windRose, {
+        records: d.windData?.records ?? [],
+        orientation: d.optimization?.bestHeading ?? null,
+        cwLimit: effectiveRunwayCrosswindKt(d.xwLimit, 20),
+        mode: "airport",
+      });
+    }
     if (d.notes) body += `<h2>Notes</h2><p>${esc(d.notes)}</p>`;
     body += `</div>`;
   }
@@ -233,11 +294,22 @@ export function buildProfessionalReportHTML(args: {
     body += `<h2>FATO & Approach Orientation</h2>`;
     body += kvTable([
       ["FATO Optimal Heading", d.fatoResult?.optimalHeading != null ? `${String(Math.round(d.fatoResult.optimalHeading)).padStart(3, "0")}° / ${String(Math.round((d.fatoResult.optimalHeading + 180) % 360 || 360)).padStart(3, "0")}°` : "—"],
+      ["Crosswind limit (analysis)", d.effectiveHelipadXw != null ? `${Number(d.effectiveHelipadXw).toFixed(1)} kt${d.helipadUseCustomXw ? " (custom)" : ""}` : "—"],
+      ["Primary inbound (headwind)", d.fatoResult?.recommendedApproach != null ? `${String(Math.round(d.fatoResult.recommendedApproach)).padStart(3, "0")}°` : "—"],
       ["Usability Achieved", d.fatoResult?.usabilityPercent != null ? `${Number(d.fatoResult.usabilityPercent).toFixed(1)}%` : "—"],
-      ["Preferred Approach Direction", d.approachResult?.approachDir != null ? `${String(Math.round(d.approachResult.approachDir)).padStart(3, "0")}°` : "—"],
-      ["Prevailing Wind Direction", d.approachResult?.prevailingDir != null ? `${String(Math.round(d.approachResult.prevailingDir)).padStart(3, "0")}°` : "—"],
+      ["Wind from (vector mean)", d.approachResult?.prevailingDir != null ? `${String(Math.round(d.approachResult.prevailingDir)).padStart(3, "0")}°` : "—"],
     ]);
-    if (opts.includeFigures) body += windFiguresHTML("Heliport", d.windRose);
+    if (opts.includeFigures) {
+      const heliCw = d.effectiveHelipadXw ?? heliportPerfClassDefaultXw(String(d.perfClass ?? "2"));
+      body += windFiguresHTML("Heliport", d.windRose, {
+        records: d.windData?.records ?? [],
+        orientation: d.fatoResult?.optimalHeading ?? null,
+        cwLimit: heliCw,
+        mode: "heliport",
+        calmThresholdKts: DEFAULT_WIND_ROSE_OPTIONS.calmThreshold,
+        useGust: false,
+      });
+    }
     body += `</div>`;
   }
 
@@ -262,7 +334,22 @@ export function buildProfessionalReportHTML(args: {
       ["Available Depth", v(d.availDepth, " m")],
       ["Current Speed", v(d.currentSpeed, " kt")],
     ]);
-    if (opts.includeFigures) body += windFiguresHTML("Water Aerodrome", d.windRose);
+    body += `<h2>Channel Alignment & Wind Usability</h2>`;
+    const selHHtml = d.rwHeading ? parseFloat(d.rwHeading) : NaN;
+    const selCandHtml = Number.isFinite(selHHtml) ? d.candidates?.find((c: any) => c.runwayHeading === selHHtml) : null;
+    body += kvTable([
+      ["Primary Channel Alignment", Number.isFinite(selHHtml) ? `${String(selHHtml).padStart(3, "0")}° / ${String(((selHHtml + 180) % 360) || 360).padStart(3, "0")}°` : "—"],
+      ["Crosswind limit (analysis)", runwayCrosswindReportLabel(d.xwLimit, { crosswindIsCustom: d.crosswindIsCustom, crosswindPreset: d.crosswindPreset })],
+      ["Calculated Usability", selCandHtml ? `${selCandHtml.usabilityPercent.toFixed(2)}%` : "—"],
+    ]);
+    if (opts.includeFigures) {
+      body += windFiguresHTML("Water Aerodrome", d.windRose, {
+        records: d.windData?.records ?? [],
+        orientation: d.rwHeading ? parseFloat(d.rwHeading) : null,
+        cwLimit: effectiveRunwayCrosswindKt(d.xwLimit, 12),
+        mode: "water",
+      });
+    }
     body += `</div>`;
   }
 

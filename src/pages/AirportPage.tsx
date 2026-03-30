@@ -15,7 +15,7 @@ import { AeroSelect, AeroInput } from "@/components/AeroInput";
 import CrosswindCalculator from "@/components/CrosswindCalculator";
 import ApproachAdvisor, { type ApproachAnalysisResult } from "@/components/ApproachAdvisor";
 import { parseWindData, type ParsedWindData, type WindRecord } from "@/lib/windDataParser";
-import { calculateWindRose, DEFAULT_WIND_ROSE_OPTIONS, type WindRoseResult } from "@/lib/windRoseCalculator";
+import { calculateWindRose, DEFAULT_WIND_ROSE_OPTIONS, windVectorMeanDirectionDeg, type WindRoseResult } from "@/lib/windRoseCalculator";
 import { renderExecutiveWindRose, renderEngineeringWindRose, renderRunwayOverlayWindRose } from "@/lib/windRoseRenderer";
 import { loadSampleDataAsFile, SAMPLE_PRESETS } from "@/lib/sampleDataGenerator";
 import { calculateRunwayUsability, optimizeRunwayOrientation, type RunwayUsabilityResult, type OptimizationResult } from "@/lib/windComponents";
@@ -26,7 +26,7 @@ import { exportCSV } from "@/lib/exportUtils";
 import DataSourcesModule from "@/components/DataSourcesModule";
 import ScenarioComparison from "@/components/ScenarioComparison";
 
-import { useAnalysis } from "@/contexts/AnalysisContext";
+import { useAnalysis, type AirportReportData } from "@/contexts/AnalysisContext";
 import { Wind, Download, Database, ChevronRight, ChevronLeft, CheckCircle2, Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -53,6 +53,24 @@ const ARC_ROWS = [
 
 const hdg = (d: number) =>
   String(Math.round(((d % 360) + 360) % 360 || 360)).padStart(3, "0");
+
+function initAirportXwSelect(data: AirportReportData | null): string {
+  if (!data) return "20";
+  if (data.crosswindIsCustom || data.crosswindPreset === "custom") return "custom";
+  if (data.crosswindPreset && ["10", "13", "20"].includes(data.crosswindPreset)) return data.crosswindPreset;
+  const n = data.xwLimit;
+  if (n === 10) return "10";
+  if (n === 13) return "13";
+  if (n === 20) return "20";
+  return "custom";
+}
+
+function initAirportCustomXw(data: AirportReportData | null, select: string): string {
+  if (!data) return "";
+  if (data.crosswindCustomKt != null && String(data.crosswindCustomKt).trim() !== "") return String(data.crosswindCustomKt);
+  if (select === "custom" && Number.isFinite(data.xwLimit)) return String(data.xwLimit);
+  return "";
+}
 
 // ─── Component ────────────────────────────────────────────────────────────────
 const AirportPage = () => {
@@ -85,7 +103,7 @@ const AirportPage = () => {
   const [windLoading, setWindLoading] = useState(false);
   const [windError, setWindError] = useState<string | null>(null);
   const [showSamples, setShowSamples] = useState(false);
-  const [calmThresh, setCalmThresh] = useState("3");
+  const [calmThresh, setCalmThresh] = useState("1");
   const [sectorType, setSectorType] = useState("22.5");
   const [monthFilter, setMonthFilter] = useState("all");
 
@@ -95,8 +113,11 @@ const AirportPage = () => {
 
   // Tab 4 — Runway Orientation
   const [rwHeading, setRwHeading] = useState("180");
-  const [xwLimit, setXwLimit] = useState(airportReportData?.xwLimit ? String(airportReportData.xwLimit) : "20");
-  const [customXw, setCustomXw] = useState("");
+  const [xwLimit, setXwLimit] = useState(() => initAirportXwSelect(airportReportData));
+  const [customXw, setCustomXw] = useState(() => {
+    const sel = initAirportXwSelect(airportReportData);
+    return initAirportCustomXw(airportReportData, sel);
+  });
   const [candidates, setCandidates] = useState<RunwayUsabilityResult[]>(airportReportData?.candidates || []);
   const [optimization, setOptimization] = useState<OptimizationResult | null>(airportReportData?.optimization || null);
 
@@ -138,7 +159,7 @@ const AirportPage = () => {
     return calculateWindRose(parsedData.records, {
       ...DEFAULT_WIND_ROSE_OPTIONS,
       sectorSize: parseFloat(sectorType),
-      calmThreshold: parseFloat(calmThresh) || 3,
+      calmThreshold: parseFloat(calmThresh) || 1,
       useGust: false,
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
@@ -150,6 +171,16 @@ const AirportPage = () => {
     const max = windRose.bins.reduce((a, b) => a.totalFrequency > b.totalFrequency ? a : b);
     return { direction: max.label, center: max.directionCenter, freq: max.totalFrequency };
   }, [windRose]);
+
+  const windFromVectorMean = useMemo(() => (windRose ? windVectorMeanDirectionDeg(windRose) : null), [windRose]);
+
+  const runwayAxisFromWindVector = useMemo(() => {
+    if (windFromVectorMean == null) return null;
+    const p = (((Math.round(windFromVectorMean) % 360) + 360) % 360) || 360;
+    const low = p > 180 ? p - 180 : p;
+    const high = (low + 180) % 360;
+    return { windFrom: p, low, high };
+  }, [windFromVectorMean]);
 
   const svgString = useMemo(() => {
     if (!windRose) return "";
@@ -216,13 +247,17 @@ const AirportPage = () => {
     setAirportReportData({
       projName, projLoc, elevation, refTemp, gradient, aeroCode, notes,
       windData: parsedData, windRose,
-      candidates, optimization, xwLimit: effectiveXw,
+      candidates, optimization,
+      xwLimit: effectiveXw,
+      crosswindIsCustom: xwLimit === "custom",
+      crosswindPreset: xwLimit === "custom" ? undefined : xwLimit,
+      crosswindCustomKt: xwLimit === "custom" ? customXw : undefined,
       rlResult, rlInputs, selectedAc,
       baseLength, surface
     });
   }, [
     projName, projLoc, elevation, refTemp, gradient, aeroCode, notes,
-    parsedData, windRose, candidates, optimization, effectiveXw,
+    parsedData, windRose, candidates, optimization, effectiveXw, xwLimit, customXw,
     rlResult, rlInputs, selectedAc, baseLength, surface,
     setAirportReportData
   ]);
@@ -320,7 +355,7 @@ const AirportPage = () => {
                       <AeroInput label="Project / Aerodrome Name" placeholder="New International Aerodrome" value={projName} onChange={setProjName} />
                       <AeroInput label="Location / Site" placeholder="City, Country" value={projLoc} onChange={setProjLoc} />
                       <div className="grid grid-cols-2 gap-3">
-                        <AeroInput label="Elevation" placeholder="400" unit="M AMSL" value={elevation} onChange={setElevation} />
+                        <AeroInput label="Elevation" placeholder="400" unit="M MSL" value={elevation} onChange={setElevation} />
                         <AeroInput label="Reference Temperature" placeholder="40" unit="°C" value={refTemp} onChange={setRefTemp} />
                       </div>
                       <div className="grid grid-cols-2 gap-3">
@@ -386,7 +421,7 @@ const AirportPage = () => {
                   />
                   <InstrumentCard title="Analysis Options">
                     <div className="space-y-3">
-                      <AeroInput label="Calm Threshold" placeholder="3" unit="KT" value={calmThresh} onChange={setCalmThresh} />
+                      <AeroInput label="Calm Threshold" placeholder="1" unit="KT" value={calmThresh} onChange={setCalmThresh} />
                       <AeroSelect label="Sector Size" value={sectorType} onChange={setSectorType} options={[
                         { value: "22.5", label: "22.5° (16 sectors)" },
                         { value: "10", label: "10° (36 sectors)" },
@@ -493,9 +528,21 @@ const AirportPage = () => {
                     {prevailingWind && (
                       <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 bg-primary/5 border border-primary/20 rounded-sm text-[11px] font-mono-data">
                         <span className="text-muted-foreground">Wind Rose Analysis →</span>
-                        <span className="text-foreground">Prevailing: <span className="text-primary">{prevailingWind.direction} ({prevailingWind.center}°) — {prevailingWind.freq.toFixed(1)}%</span></span>
+                        <span className="text-foreground">Peak sector: <span className="text-primary">{prevailingWind.direction} ({prevailingWind.center}°) — {prevailingWind.freq.toFixed(1)}%</span></span>
                         <span className="text-muted-foreground">·</span>
-                        <span className="text-foreground">Suggested runway heading (into wind): <span className="text-primary">{hdg((prevailingWind.center + 180) % 360)}° / {hdg(prevailingWind.center)}°</span></span>
+                        <span className="text-foreground">
+                          {runwayAxisFromWindVector ? (
+                            <>
+                              Vector mean (wind from): <span className="text-primary">{hdg(runwayAxisFromWindVector.windFrom)}°</span>
+                              <span className="text-muted-foreground"> · </span>
+                              Inbound (headwind): <span className="text-primary">{hdg(runwayAxisFromWindVector.windFrom)}°</span>
+                              <span className="text-muted-foreground"> · </span>
+                              Runway axis: <span className="text-primary">{hdg(runwayAxisFromWindVector.low)}° / {hdg(runwayAxisFromWindVector.high)}°</span>
+                            </>
+                          ) : (
+                            <>Runway axis from peak sector: <span className="text-primary">{hdg(prevailingWind.center <= 180 ? ((prevailingWind.center % 360) || 360) : prevailingWind.center - 180)}° / {hdg(((prevailingWind.center <= 180 ? ((prevailingWind.center % 360) || 360) : prevailingWind.center - 180) + 180) % 360)}</span></>
+                          )}
+                        </span>
                       </div>
                     )}
                   </>
@@ -520,9 +567,19 @@ const AirportPage = () => {
                     {prevailingWind && (
                       <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 bg-primary/5 border border-primary/20 rounded-sm text-[11px] font-mono-data">
                         <span className="text-muted-foreground">From Wind Rose →</span>
-                        <span className="text-foreground">Prevailing: <span className="text-primary">{prevailingWind.direction} ({prevailingWind.center}°)</span></span>
+                        <span className="text-foreground">Peak sector: <span className="text-primary">{prevailingWind.direction} ({prevailingWind.center}°)</span></span>
                         <span className="text-muted-foreground">·</span>
-                        <span className="text-foreground">Recommended heading: <span className="text-primary">{hdg((prevailingWind.center + 180) % 360)}° / {hdg(prevailingWind.center)}°</span></span>
+                        <span className="text-foreground">
+                          {runwayAxisFromWindVector ? (
+                            <>
+                              Inbound (headwind): <span className="text-primary">{hdg(runwayAxisFromWindVector.windFrom)}°</span>
+                              <span className="text-muted-foreground"> · </span>
+                              Runway axis: <span className="text-primary">{hdg(runwayAxisFromWindVector.low)}° / {hdg(runwayAxisFromWindVector.high)}°</span>
+                            </>
+                          ) : (
+                            <>Runway axis (peak): <span className="text-primary">{hdg(prevailingWind.center)}°</span></>
+                          )}
+                        </span>
                         {optimization && (
                           <>
                             <span className="text-muted-foreground">·</span>
@@ -611,14 +668,14 @@ const AirportPage = () => {
                     <div className="mt-8 space-y-8">
                       <OrientationOptimizer 
                         records={parsedData?.records || []} 
-                        limit={xwLimit !== "custom" ? Number(xwLimit) : parseFloat(customXw || "0")} 
+                        limit={effectiveXw} 
                         mode="airport" 
                       />
                       <AdvancedWindAnalysis 
                         windRose={windRose || null} 
                         records={parsedData?.records || []} 
                         orientation={optimization?.bestHeading ?? (rwHeading ? parseFloat(rwHeading) : null)} 
-                        cwLimit={xwLimit !== "custom" ? Number(xwLimit) : parseFloat(customXw || "0")} 
+                        cwLimit={effectiveXw} 
                         mode="airport" 
                         fileNamePrefix="airport" 
                       />
@@ -718,7 +775,7 @@ const AirportPage = () => {
                   <InstrumentCard title="Airport Parameters">
                     <div className="space-y-4">
                       <AeroInput label="Base Runway Length (ARFL)" placeholder="1800" unit="M" value={baseLength} onChange={setBaseLength} />
-                      <AeroInput label="Aerodrome Elevation" placeholder="400" unit="M AMSL" value={elevation} onChange={setElevation} />
+                      <AeroInput label="Aerodrome Elevation" placeholder="400" unit="M MSL" value={elevation} onChange={setElevation} />
                       <AeroInput label="Reference Temperature" placeholder="40" unit="°C" value={refTemp} onChange={setRefTemp} />
                       <AeroInput label="Effective Gradient" placeholder="1.0" unit="%" value={gradient} onChange={setGradient} />
                       <AeroSelect label="Surface Condition" value={surface} onChange={setSurface} options={[
@@ -864,7 +921,7 @@ const AirportPage = () => {
                         {[
                           ["Project", projName || "—"],
                           ["Location", projLoc || "—"],
-                          ["Elevation", elevation ? `${elevation} m AMSL` : "—"],
+                          ["Elevation", elevation ? `${elevation} m MSL` : "—"],
                           ["Reference Temperature", refTemp ? `${refTemp} °C` : "—"],
                           ["Effective Gradient", gradient ? `${gradient}%` : "—"],
                           ["Aerodrome Code", `Code ${aeroCode}`],
@@ -907,12 +964,14 @@ const AirportPage = () => {
                             ["Optimal Heading", `${hdg(optimization.bestHeading)}° / ${hdg((optimization.bestHeading + 180) % 360)}°`],
                             ["Wind Usability", `${optimization.bestUsability.toFixed(2)}%`],
                             ["ICAO 95% Threshold", optimization.bestUsability >= 95 ? "✓ PASS" : "✗ BELOW 95%"],
-                            ["Crosswind Limit Applied", `${effectiveXw} kt`],
+                            ["Crosswind Limit Applied", `${effectiveXw.toFixed(1)} kt${xwLimit === "custom" ? " (custom)" : ""}`],
                             ["Primary Approach Dir", approachResult
                               ? `${hdg(approachResult.approachDir)}° (RWY ${approachResult.rwyDesignator})`
-                              : prevailingWind
-                                ? `${hdg((prevailingWind.center + 180) % 360)}°`
-                                : "—"],
+                              : windFromVectorMean != null
+                                ? `${hdg(windFromVectorMean)}°`
+                                : prevailingWind
+                                  ? `${hdg(prevailingWind.center)}°`
+                                  : "—"],
                           ].map(([k, v]) => (
                             <div key={k} className="flex justify-between border-b border-border pb-1">
                               <span className="text-muted-foreground">{k}</span>

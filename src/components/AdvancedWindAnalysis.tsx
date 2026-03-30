@@ -11,9 +11,12 @@ interface AdvancedWindAnalysisProps {
   cwLimit: number | null;
   mode: "airport" | "heliport" | "water";
   fileNamePrefix: string;
+  /** When set with heliport mode, calm classification matches wind rose / FATO analysis */
+  calmThresholdKts?: number;
+  useGust?: boolean;
 }
 
-export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, mode, fileNamePrefix }: AdvancedWindAnalysisProps) => {
+export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, mode, fileNamePrefix, calmThresholdKts, useGust = false }: AdvancedWindAnalysisProps) => {
 
   const prevailingSummary = useMemo(() => {
     if (!windRose) return null;
@@ -39,6 +42,8 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
     if (orientation === null || cwLimit === null || !records.length) return null;
     let within = 0;
     let totalValid = 0;
+    const useDynamicCalm =
+      mode === "heliport" && calmThresholdKts !== undefined && Number.isFinite(calmThresholdKts);
     const bins = [
       { label: "0-5 kt", min: 0, max: 5, count: 0 },
       { label: "6-10 kt", min: 5.01, max: 10, count: 0 },
@@ -50,7 +55,9 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
 
     records.forEach(r => {
       if (!r.isValid) return;
-      if (r.isCalm) {
+      const windSpd = useGust && r.wind_gust_kt !== null ? r.wind_gust_kt : r.wind_speed_kt;
+      const isCalmObs = useDynamicCalm ? windSpd <= calmThresholdKts! : r.isCalm;
+      if (isCalmObs) {
         bins[0].count++;
         within++;
         totalValid++;
@@ -60,7 +67,7 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
       let dirDiff = Math.abs(r.wind_direction_deg - orientation);
       if (dirDiff > 180) dirDiff = 360 - dirDiff;
       const rad = (dirDiff * Math.PI) / 180;
-      const cw = Math.abs(r.wind_speed_kt * Math.sin(rad));
+      const cw = Math.abs(windSpd * Math.sin(rad));
 
       if (cw <= cwLimit) within++;
 
@@ -77,7 +84,7 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
       coverage: totalValid > 0 ? (within / totalValid) * 100 : 0,
       totalValid
     };
-  }, [records, orientation, cwLimit]);
+  }, [records, orientation, cwLimit, mode, calmThresholdKts, useGust]);
 
   if (!windRose || !records.length) {
     return (

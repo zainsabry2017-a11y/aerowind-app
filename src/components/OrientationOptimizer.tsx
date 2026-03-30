@@ -7,19 +7,25 @@ interface OrientationOptimizerProps {
   records: WindRecord[];
   limit: number;
   mode: "airport" | "heliport" | "water";
+  /** When set, calm = effective speed ≤ threshold (matches wind rose). When omitted, uses parser isCalm / 0 kt. */
+  calmThresholdKts?: number;
+  useGust?: boolean;
 }
 
-export function OrientationOptimizer({ records, limit, mode }: OrientationOptimizerProps) {
+export function OrientationOptimizer({ records, limit, mode, calmThresholdKts, useGust = false }: OrientationOptimizerProps) {
   // 1) Compute usability for 0-359
   const curve = useMemo(() => {
     const valid = records.filter(r => r.isValid);
     const total = valid.length;
     if (total === 0) return [];
+    const useDynamicCalm = calmThresholdKts !== undefined && Number.isFinite(calmThresholdKts);
 
     return Array.from({ length: 360 }, (_, theta) => {
       let usable = 0;
       for (const r of valid) {
-        if (r.isCalm || r.wind_speed_kt === 0) {
+        const windSpd = useGust && r.wind_gust_kt !== null ? r.wind_gust_kt : r.wind_speed_kt;
+        const isCalmObs = useDynamicCalm ? windSpd <= calmThresholdKts! : r.isCalm || r.wind_speed_kt === 0;
+        if (isCalmObs) {
           usable++;
           continue;
         }
@@ -27,7 +33,7 @@ export function OrientationOptimizer({ records, limit, mode }: OrientationOptimi
         let diff = Math.abs(r.wind_direction_deg - theta);
         if (diff > 180) diff = 360 - diff;
 
-        const crosswind = r.wind_speed_kt * Math.sin((diff * Math.PI) / 180);
+        const crosswind = windSpd * Math.sin((diff * Math.PI) / 180);
         
         if (crosswind <= limit) {
           usable++;
@@ -35,7 +41,7 @@ export function OrientationOptimizer({ records, limit, mode }: OrientationOptimi
       }
       return { theta, usability: (usable / total) * 100 };
     });
-  }, [records, limit]);
+  }, [records, limit, calmThresholdKts, useGust]);
 
   // 2) Derive optimal endpoints
   const { optimal, secondary } = useMemo(() => {

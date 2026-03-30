@@ -16,7 +16,11 @@ export interface AirportReportData {
   windRose: WindRoseResult | null;
   candidates: RunwayUsabilityResult[];
   optimization: OptimizationResult | null;
+  /** Effective crosswind limit (kt) used in optimization */
   xwLimit: number;
+  crosswindIsCustom?: boolean;
+  crosswindPreset?: string;
+  crosswindCustomKt?: string;
   rlResult: RunwayLengthResult | null;
   rlInputs: any;
   selectedAc: any;
@@ -30,6 +34,7 @@ export interface HeliportReportData {
   elevation: string;
   perfClass: string;
   heliType: string;
+  helipadType: string;
   notes: string;
   windData: ParsedWindData | null;
   windRose: WindRoseResult | null;
@@ -42,6 +47,11 @@ export interface HeliportReportData {
   rotorDia: string;
   mtow: string;
   helipad: any; // Evaluated helper data (helicopter, dVal, rotor)
+  /** Helipad FATO analysis: custom vs inherited crosswind */
+  helipadUseCustomXw?: boolean;
+  helipadCustomXw?: string;
+  /** Resolved limit (kt) used for optimization / reports */
+  effectiveHelipadXw?: number | null;
 }
 
 export interface WaterReportData {
@@ -54,6 +64,9 @@ export interface WaterReportData {
   candidates: RunwayUsabilityResult[];
   optimization: OptimizationResult | null;
   xwLimit: number;
+  crosswindIsCustom?: boolean;
+  crosswindPreset?: string;
+  crosswindCustomKt?: string;
   rwHeading: string;
   selectedAc: any;
   waveState: string;

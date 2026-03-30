@@ -54,8 +54,8 @@ function getDirectionLabel(center: number): string {
 }
 
 function getSpeedLabel(min: number, max: number): string {
-  if (max === Infinity) return `≥${min} kts`;
-  return `${min}–${max} kts`;
+  if (max === Infinity) return `\u2265${min.toFixed(2)} kts`;
+  return `${min.toFixed(2)} - ${max.toFixed(2)} kts`;
 }
 
 // ── Month extraction ───────────────────────────────────
@@ -157,7 +157,7 @@ export function calculateWindRose(records: WindRecord[], options: WindRoseOption
     const dir = r.wind_direction_deg;
 
     // Find direction bin
-    let binIdx = Math.round(dir / sectorSize) % numSectors;
+    const binIdx = Math.round(dir / sectorSize) % numSectors;
     const bin = bins[binIdx];
 
     // Find speed bin
@@ -194,9 +194,27 @@ export function calculateWindRose(records: WindRecord[], options: WindRoseOption
 
 export const DEFAULT_WIND_ROSE_OPTIONS: WindRoseOptions = {
   sectorSize: 22.5,
-  speedBins: [0, 4, 7, 11, 17, 22],
-  calmThreshold: 3,
+  speedBins: [1, 4, 6, 10, 16, 21, 41],
+  calmThreshold: 1,
   useGust: false,
   monthFilter: null,
   seasonFilter: null,
 };
+
+/** Frequency-weighted vector mean (deg), meteorological “wind from” direction. */
+export function windVectorMeanDirectionDeg(windRose: WindRoseResult): number | null {
+  let sinSum = 0;
+  let cosSum = 0;
+  let totalWeight = 0;
+  for (const bin of windRose.bins) {
+    const rad = (bin.directionCenter * Math.PI) / 180;
+    const w = bin.totalFrequency;
+    sinSum += w * Math.sin(rad);
+    cosSum += w * Math.cos(rad);
+    totalWeight += w;
+  }
+  if (totalWeight === 0) return null;
+  let meanDir = (Math.atan2(sinSum, cosSum) * 180) / Math.PI;
+  meanDir = ((meanDir % 360) + 360) % 360;
+  return meanDir;
+}

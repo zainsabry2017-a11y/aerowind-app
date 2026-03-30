@@ -31,11 +31,11 @@ import { OrientationOptimizer } from "@/components/OrientationOptimizer";
 import HelipadUsability, { type HelipadUsabilityResult } from "@/components/HelipadUsability";
 import ApproachAdvisor, { type ApproachAnalysisResult } from "@/components/ApproachAdvisor";
 import { AeroSelect, AeroInput } from "@/components/AeroInput";
-import { helicopterDatabase, toFeet, toLbs, type HelicopterData } from "@/data/aircraftDatabase";
+import { helicopterDatabase, planningCrosswindLimitForHelicopter, toFeet, toLbs, type HelicopterData } from "@/data/aircraftDatabase";
 import { DISCLAIMER, HELIPORT_DISCLAIMER, DATA_LABELS } from "@/lib/engineeringSafety";
 import { parseWindData, type ParsedWindData, type WindRecord } from "@/lib/windDataParser";
-import { calculateWindRose, DEFAULT_WIND_ROSE_OPTIONS, type WindRoseResult } from "@/lib/windRoseCalculator";
-import { optimizeRunwayOrientation } from "@/lib/windComponents";
+import { calculateWindRose, DEFAULT_WIND_ROSE_OPTIONS, windVectorMeanDirectionDeg, type WindRoseResult } from "@/lib/windRoseCalculator";
+import { inboundHeadingForHeadwind, optimizeRunwayOrientation } from "@/lib/windComponents";
 import { renderExecutiveWindRose, renderEngineeringWindRose } from "@/lib/windRoseRenderer";
 import { loadSampleDataAsFile, downloadSampleCSV, SAMPLE_PRESETS } from "@/lib/sampleDataGenerator";
 import { exportCSV } from "@/lib/exportUtils";
@@ -60,14 +60,22 @@ const TABS = [
 
 type TabId = typeof TABS[number]["id"];
 
-const OLS_ROWS = [
-  ["FATO Safety Area", "1:5", "1:10", "1:5"],
-  ["Approach Surface (inner)", "1:12.5", "10%", "—"],
-  ["Approach Surface (outer)", "1:40", "10%", "—"],
-  ["Transitional Surface", "1:2", "—", "—"],
-  ["Take-off Climb", "1:12.5", "15%", "—"],
-  ["Conical Surface", "1:20", "35%", "—"],
-];
+// OLS rows – dynamic per ICAO Annex 14 Vol II §4
+// Transitional Surface: surface-level heliports only
+// Conical Surface: NOT part of heliport OLS (aerodrome concept — removed per Annex 14 Vol II)
+const getOlsRows = (heliType: string): string[][] => {
+  const isSurface = heliType === "surface";
+  const rows: string[][] = [
+    ["FATO / Safety Area (inner horizontal)", "1:5 inward", "—", "All heliport types"],
+    ["Approach / Take-off Climb (inner)", "1:12.5", "10% half-width", "All heliport types"],
+    ["Approach / Take-off Climb (outer)", "1:40", "10% half-width", "All heliport types"],
+    ["Take-off Climb Surface", "1:12.5", "15% half-width", "All heliport types"],
+  ];
+  if (isSurface) {
+    rows.splice(3, 0, ["Transitional Surface", "1:2", "—", "Surface-level only"]);
+  }
+  return rows;
+};
 
 const HeliportPage = () => {
   const [activeTab, setActiveTab] = useState<TabId>("project");
@@ -89,16 +97,24 @@ const HeliportPage = () => {
   const [elevation, setElevation] = useState(heliportReportData?.elevation || "60");
   const [perfClass, setPerfClass] = useState(heliportReportData?.perfClass || "1");
   const [heliType, setHeliType] = useState(heliportReportData?.heliType || "surface");
+  const [helipadType, setHelipadType] = useState(heliportReportData?.helipadType || "general");
   const [notes, setNotes] = useState(heliportReportData?.notes || "");
 
   const [parsedData, setParsedData] = useState<ParsedWindData | null>(heliportReportData?.windData || null);
   const [windLoading, setWindLoading] = useState(false);
   const [windError, setWindError] = useState<string | null>(null);
   const [showSamples, setShowSamples] = useState(false);
-  const [calmThreshold, setCalmThreshold] = useState("3");
+  const [calmThreshold, setCalmThreshold] = useState("1");
   const [monthFilter, setMonthFilter] = useState("all");
   const [sectorType, setSectorType] = useState("22.5");
   const [useGust, setUseGust] = useState(false);
+  const [helipadUseCustomXw, setHelipadUseCustomXw] = useState(heliportReportData?.helipadUseCustomXw ?? false);
+  const [helipadCustomXw, setHelipadCustomXw] = useState(heliportReportData?.helipadCustomXw ?? "");
+
+  const effectiveCalmThreshold = useMemo(() => {
+    const t = parseFloat(calmThreshold);
+    return Number.isFinite(t) ? t : 1;
+  }, [calmThreshold]);
 
   const [roseStyle, setRoseStyle] = useState<"executive" | "engineering">("executive");
   const svgRef = useRef<HTMLDivElement>(null);
@@ -127,17 +143,14 @@ const HeliportPage = () => {
     (selectionMode === "specific" && !!selectedHeli) ||
     (selectionMode === "generic" && !!planningCategory);
 
-  const fmtLen = (m: number) => isMetric ? m.toFixed(1) : toFeet(m).toFixed(1);
+  const fmtLen = (m: number) => isMetric ? m.toFixed(2) : toFeet(m).toFixed(2);
   const fmtMass = (kg: number) =>
-    isMetric ? kg.toLocaleString() : toLbs(kg).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    isMetric ? kg.toFixed(2) : toLbs(kg).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const heliXwLimit = useMemo<number | null>(() => {
     if (selectionMode === "specific") {
       if (!helicopter) return null;
-      const kg = helicopter.mtow_kg;
-      if (kg < 3000) return 10;
-      if (kg < 9000) return 15;
-      return 17;
+      return planningCrosswindLimitForHelicopter(helicopter);
     }
     if (selectionMode === "generic" && planningCategory) {
       return planningCategory === "light" ? 10
@@ -147,6 +160,21 @@ const HeliportPage = () => {
     }
     return null;
   }, [helicopter, selectionMode, planningCategory]);
+
+  const effectiveHelipadXw = useMemo((): number | null => {
+    if (helipadUseCustomXw) {
+      const c = parseFloat(helipadCustomXw.trim());
+      if (Number.isFinite(c) && c > 0) return Math.min(c, 99);
+      return heliXwLimit ?? 15;
+    }
+    return heliXwLimit;
+  }, [helipadUseCustomXw, helipadCustomXw, heliXwLimit]);
+
+  const perfClassDefaultXw = useMemo(
+    () => (perfClass === "1" ? 17 : perfClass === "2" ? 15 : perfClass === "3" ? 10 : 15),
+    [perfClass]
+  );
+  const approachAnalysisXw = effectiveHelipadXw ?? perfClassDefaultXw;
 
   const tlof = Math.max(dVal, rotor);
   const fato = dVal * 1.5;
@@ -159,12 +187,12 @@ const HeliportPage = () => {
     return calculateWindRose(parsedData.records, {
       ...DEFAULT_WIND_ROSE_OPTIONS,
       sectorSize: parseFloat(sectorType),
-      calmThreshold: parseFloat(calmThreshold) || 3,
+      calmThreshold: effectiveCalmThreshold,
       useGust,
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
     });
-  }, [parsedData, sectorType, calmThreshold, useGust, monthFilter]);
+  }, [parsedData, sectorType, effectiveCalmThreshold, useGust, monthFilter]);
 
   const svgString = useMemo(() => {
     if (!windRose) return "";
@@ -183,38 +211,36 @@ const HeliportPage = () => {
     return { direction: max.label, center: max.directionCenter, freq: max.totalFrequency };
   }, [windRose]);
 
+  const windFromVectorMean = useMemo(() => (windRose ? windVectorMeanDirectionDeg(windRose) : null), [windRose]);
+
   // ── Unconditional Computations for Reports Center ──
   const fatoResult = useMemo<HelipadUsabilityResult | null>(() => {
-    if (!records.length || heliXwLimit === null) return null;
-    const opt = optimizeRunwayOrientation(records, heliXwLimit);
+    if (!records.length || effectiveHelipadXw === null) return null;
+    const opt = optimizeRunwayOrientation(records, effectiveHelipadXw, effectiveCalmThreshold, useGust);
+    const recommendedApproach =
+      opt.bestHeading != null && windFromVectorMean != null
+        ? inboundHeadingForHeadwind(windFromVectorMean, opt.bestHeading)
+        : null;
     return {
       optimalHeading: opt.bestHeading,
       usabilityPercent: opt.bestUsability,
-      recommendedApproach: opt.bestHeading !== null ? (opt.bestHeading + 180) % 360 : null,
-      prevailingWind: prevailingWind?.center ?? null
+      recommendedApproach,
+      prevailingWind: windFromVectorMean ?? prevailingWind?.center ?? null
     };
-  }, [records, heliXwLimit, prevailingWind]);
+  }, [records, effectiveHelipadXw, prevailingWind, windFromVectorMean, effectiveCalmThreshold, useGust]);
 
   const approachResult = useMemo<ApproachAnalysisResult | null>(() => {
     if (!windRose) return null;
-    let sinSum = 0, cosSum = 0, totalWeight = 0;
-    for (const bin of windRose.bins) {
-      const rad = (bin.directionCenter * Math.PI) / 180;
-      sinSum += bin.totalFrequency * Math.sin(rad);
-      cosSum += bin.totalFrequency * Math.cos(rad);
-      totalWeight += bin.totalFrequency;
-    }
-    if (totalWeight === 0) return null;
+    const meanDir = windVectorMeanDirectionDeg(windRose);
+    if (meanDir === null) return null;
 
-    let meanDir = (Math.atan2(sinSum, cosSum) * 180) / Math.PI;
-    meanDir = ((meanDir % 360) + 360) % 360;
-
-    const approachDir = (meanDir + 180) % 360;
+    // Inbound with headwind: same heading as wind-from (not +180°).
+    const approachDir = meanDir;
     const rwHeading = meanDir <= 180 ? meanDir : meanDir - 180;
     const rwReciprocal = (rwHeading + 180) % 360;
     const rwyNum1 = Math.round(rwHeading / 10) || 36;
     const rwyNum2 = Math.round(rwReciprocal / 10) || 36;
-    
+
     const sorted = [...windRose.bins].sort((a, b) => b.totalFrequency - a.totalFrequency);
     const secondary = sorted.length > 1 ? sorted[1] : null;
 
@@ -242,17 +268,21 @@ const HeliportPage = () => {
   useEffect(() => {
     setHeliportReportData({
       projName: projectName || projectLoc,
-      projectLoc, elevation, perfClass, heliType, notes,
+      projectLoc, elevation, perfClass, heliType, helipadType, notes,
       windData: parsedData, windRose,
       fatoResult, approachResult,
       selectedHeli, planningCategory, selectionMode, dValue, rotorDia, mtow,
-      helipad: { helicopter, dVal, rotor }
+      helipad: { helicopter, dVal, rotor },
+      helipadUseCustomXw,
+      helipadCustomXw,
+      effectiveHelipadXw,
     });
   }, [
-    projectName, projectLoc, elevation, perfClass, heliType, notes,
+    projectName, projectLoc, elevation, perfClass, heliType, helipadType, notes,
     parsedData, windRose, fatoResult, approachResult,
     selectedHeli, planningCategory, selectionMode, dValue, rotorDia, mtow,
-    helicopter, dVal, rotor, setHeliportReportData
+    helicopter, dVal, rotor, helipadUseCustomXw, helipadCustomXw, effectiveHelipadXw,
+    setHeliportReportData
   ]);
 
   const bestUsabilityMsg = fatoResult?.usabilityPercent
@@ -368,7 +398,7 @@ const HeliportPage = () => {
                     <div className="space-y-4">
                       <AeroInput label="Project Name" placeholder="Heliport Design — Site A" value={projectName} onChange={setProjectName} />
                       <AeroInput label="Location / Coordinates" placeholder="Riyadh, 24.7136° N, 46.6753° E" value={projectLoc} onChange={setProjectLoc} />
-                      <AeroInput label="Site Elevation" placeholder="600" unit="M AMSL" value={elevation} onChange={setElevation} />
+                      <AeroInput label="Site Elevation" placeholder="600" unit="M MSL" value={elevation} onChange={setElevation} />
                       <AeroSelect label="Performance Class" value={perfClass} onChange={setPerfClass} options={[
                         { value: "1", label: "Class 1 — Multi-engine, no forced landing" },
                         { value: "2", label: "Class 2 — Some exposure on T/O or Landing" },
@@ -379,6 +409,16 @@ const HeliportPage = () => {
                         { value: "elevated", label: "Elevated Heliport" },
                         { value: "helideck", label: "Helideck (Offshore)" },
                         { value: "hospital", label: "Hospital Heliport" },
+                      ]} />
+                      <AeroSelect label="Type of Helipad" value={helipadType} onChange={setHelipadType} options={[
+                        { value: "general", label: "General Aviation" },
+                        { value: "hospital", label: "Hospital / EMS Helipad" },
+                        { value: "offshore", label: "Offshore / Helideck" },
+                        { value: "vip", label: "VIP / Executive" },
+                        { value: "sar", label: "SAR / Emergency Services" },
+                        { value: "military", label: "Military / Defence" },
+                        { value: "naval", label: "Naval / Ship-deck" },
+                        { value: "utility", label: "Utility / Transport" },
                       ]} />
                     </div>
                   </InstrumentCard>
@@ -431,7 +471,7 @@ const HeliportPage = () => {
 
                   <InstrumentCard title="Analysis Parameters">
                     <div className="space-y-4">
-                      <AeroInput label="Calm Threshold" placeholder="3.0" unit="KTS" value={calmThreshold} onChange={setCalmThreshold} />
+                      <AeroInput label="Calm Threshold" placeholder="1.0" unit="KTS" value={calmThreshold} onChange={setCalmThreshold} />
                       <AeroSelect label="Sector Size" value={sectorType} onChange={setSectorType} options={[
                         { value: "10", label: "10° (36 sectors)" },
                         { value: "15", label: "15° (24 sectors)" },
@@ -499,6 +539,7 @@ const HeliportPage = () => {
                         sectorSizeDeg={parseFloat(sectorType) || 22.5}
                         monthFilter={monthFilter === "all" ? null : [parseInt(monthFilter)]}
                         useGust={useGust}
+                        orientationCalmKts={effectiveCalmThreshold}
                       />
                     </>
                   ) : (
@@ -572,16 +613,26 @@ const HeliportPage = () => {
                   <>
                     <WarningBanner message="FATO orientation is derived from wind usability analysis per ICAO Annex 14 Vol II §3.1.4. Crosswind limit per helicopter type." />
 
-                    {prevailingWind && (
+                    {(prevailingWind || windFromVectorMean != null) && (
                       <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 bg-primary/5 border border-primary/20 rounded-sm text-[11px] font-mono-data">
                         <span className="text-muted-foreground">From Wind Rose →</span>
-                        <span className="text-foreground">Prevailing: <span className="text-primary">{prevailingWind.direction} ({prevailingWind.center}°)</span></span>
-                        <span className="text-muted-foreground">·</span>
-                        <span className="text-foreground">Suggested FATO heading (into wind): <span className="text-primary">{hdg((prevailingWind.center + 180) % 360)}°</span></span>
+                        {prevailingWind && (
+                          <>
+                            <span className="text-foreground">Peak sector: <span className="text-primary">{prevailingWind.direction} ({prevailingWind.center}°)</span></span>
+                            <span className="text-muted-foreground">·</span>
+                          </>
+                        )}
+                        {windFromVectorMean != null && (
+                          <>
+                            <span className="text-foreground">Vector mean (wind from): <span className="text-primary">{hdg(windFromVectorMean)}°</span></span>
+                            <span className="text-muted-foreground">·</span>
+                            <span className="text-foreground">Inbound (headwind): <span className="text-primary">{hdg(windFromVectorMean)}°</span></span>
+                          </>
+                        )}
                         {fatoResult?.optimalHeading != null && (
                           <>
                             <span className="text-muted-foreground">·</span>
-                            <span className="text-foreground">Optimal: <span className="text-primary">{hdg(fatoResult.optimalHeading)}° / {hdg((fatoResult.optimalHeading + 180) % 360)}°</span></span>
+                            <span className="text-foreground">Optimal FATO axis: <span className="text-primary">{hdg(fatoResult.optimalHeading)}° / {hdg((fatoResult.optimalHeading + 180) % 360)}°</span></span>
                             {fatoResult.usabilityPercent != null && (
                               <span className="ml-auto text-primary font-medium">{fatoResult.usabilityPercent.toFixed(1)}% usability</span>
                             )}
@@ -622,10 +673,11 @@ const HeliportPage = () => {
                             ))}
                           </div>
                         </div>
-                        {prevailingWind && heliXwLimit != null && (
+                        {prevailingWind && effectiveHelipadXw != null && (
                           <div className="mt-3 p-2 border border-border/50 bg-secondary/20 rounded-sm text-[9px] font-mono-data text-muted-foreground">
                             Prevailing crosswind (90° offset): approx.
-                            <span className="text-primary font-medium"> {(prevailingWind.freq * 0.7071).toFixed(1)}%</span> of observations may exceed {heliXwLimit} kt at peak — verify with usability analysis.
+                            <span className="text-primary font-medium"> {(prevailingWind.freq * 0.7071).toFixed(1)}%</span> of observations may exceed {effectiveHelipadXw} kt at peak — verify with usability analysis.
+                            {helipadUseCustomXw && <span className="text-warning"> (custom limit)</span>}
                           </div>
                         )}
                       </InstrumentCard>
@@ -641,17 +693,26 @@ const HeliportPage = () => {
                       </InstrumentCard>
                     )}
 
+                    {windRose && heliSelected && effectiveHelipadXw != null && (
                     <HelipadUsability 
                       records={records} 
                       windRose={windRose} 
-                      globalCrosswindLimit={heliXwLimit}
+                      inheritedCrosswindLimit={heliXwLimit}
+                      effectiveCrosswindLimit={effectiveHelipadXw}
+                      useCustomCrosswindLimit={helipadUseCustomXw}
+                      onUseCustomCrosswindLimitChange={setHelipadUseCustomXw}
+                      customCrosswindLimit={helipadCustomXw}
+                      onCustomCrosswindLimitChange={setHelipadCustomXw}
                       globalHelicopterName={helicopter ? `${helicopter.manufacturer} ${helicopter.model}` : planningCategory ? `Category: ${planningCategory}` : null}
                       globalHelicopterIcao={helicopter?.icao}
                       globalRotorDiameter={rotor}
                       globalDValue={dVal}
                       globalMtow={helicopter?.mtow_kg}
+                      calmThresholdKts={effectiveCalmThreshold}
+                      useGust={useGust}
                       onResult={() => {}} 
                     />
+                    )}
                   </>
                 )}
               </div>
@@ -678,14 +739,19 @@ const HeliportPage = () => {
                           <span className="text-muted-foreground">From FATO Orientation →</span>
                           <span className="text-foreground">Selected FATO: <span className="text-primary">{hdg(fatoResult.optimalHeading)}° / {hdg((fatoResult.optimalHeading + 180) % 360)}°</span></span>
                           <span className="text-muted-foreground">·</span>
-                          <span className="text-foreground">Primary approach (into wind): <span className="text-primary">{hdg(fatoResult.recommendedApproach ?? (fatoResult.optimalHeading + 180) % 360)}°</span></span>
+                          <span className="text-foreground">Primary approach (headwind): <span className="text-primary">{hdg(
+                            fatoResult.recommendedApproach
+                              ?? (fatoResult.optimalHeading != null && windFromVectorMean != null
+                                ? inboundHeadingForHeadwind(windFromVectorMean, fatoResult.optimalHeading)
+                                : windFromVectorMean ?? prevailingWind?.center ?? 0)
+                          )}°</span></span>
                         </>
                       ) : prevailingWind ? (
                         <>
                           <span className="text-muted-foreground">From Wind Rose →</span>
-                          <span className="text-foreground">Prevailing: <span className="text-primary">{prevailingWind.direction} ({prevailingWind.center}°)</span></span>
+                          <span className="text-foreground">Peak sector: <span className="text-primary">{prevailingWind.direction} ({prevailingWind.center}°)</span></span>
                           <span className="text-muted-foreground">·</span>
-                          <span className="text-foreground">Recommended approach: <span className="text-primary">{hdg((prevailingWind.center + 180) % 360)}°</span></span>
+                          <span className="text-foreground">Inbound (headwind): <span className="text-primary">{windFromVectorMean != null ? hdg(windFromVectorMean) : hdg(prevailingWind.center)}°</span></span>
                         </>
                       ) : (
                         <span className="text-muted-foreground italic">Run FATO Orientation (Tab 4) to pre-fill approach sectors</span>
@@ -719,16 +785,20 @@ const HeliportPage = () => {
                     <div className="mt-8 space-y-8">
                       <OrientationOptimizer 
                         records={parsedData?.records || []} 
-                        limit={perfClass === "1" ? 17 : perfClass === "2" ? 15 : perfClass === "3" ? 10 : 15} 
-                        mode="heliport" 
+                        limit={approachAnalysisXw} 
+                        mode="heliport"
+                        calmThresholdKts={effectiveCalmThreshold}
+                        useGust={useGust}
                       />
                       <AdvancedWindAnalysis 
                         windRose={windRose || null} 
                         records={parsedData?.records || []} 
                         orientation={fatoResult?.optimalHeading ?? null} 
-                        cwLimit={perfClass === "1" ? 17 : perfClass === "2" ? 15 : perfClass === "3" ? 10 : 15} 
+                        cwLimit={approachAnalysisXw} 
                         mode="heliport" 
-                        fileNamePrefix="heliport" 
+                        fileNamePrefix="heliport"
+                        calmThresholdKts={effectiveCalmThreshold}
+                        useGust={useGust}
                       />
                     </div>
                   </>
@@ -894,10 +964,11 @@ const HeliportPage = () => {
                             ["MTOW", `${fmtMass(helicopter.mtow_kg)} ${massUnit}`],
                             ["Typical Use", helicopter.typicalUse],
                             ["Heliport Relevance", helicopter.heliportRelevance],
+                            ["Type of Helipad", helipadType],
                           ].map(([k, v]) => (
                             <div key={k} className="flex justify-between border-b border-border pb-1">
                               <span className="text-muted-foreground">{k}</span>
-                              <span className="text-foreground capitalize">{v}</span>
+                              <span className={k === "Type of Helipad" ? "text-primary capitalize font-medium" : "text-foreground capitalize"}>{v}</span>
                             </div>
                           ))}
                         </div>
@@ -930,11 +1001,19 @@ const HeliportPage = () => {
                             <span className="text-muted-foreground">Planning Crosswind Limit</span>
                             <span className="text-primary font-medium">{heliXwLimit} kt</span>
                           </div>
+                          {helipadUseCustomXw && effectiveHelipadXw != null && (
+                            <div className="flex justify-between border-b border-border pb-1">
+                              <span className="text-muted-foreground">FATO analysis (custom)</span>
+                              <span className="text-warning font-medium">{effectiveHelipadXw.toFixed(1)} kt</span>
+                            </div>
+                          )}
                         </div>
                         <div className="space-y-2">
                           <p className="text-[9px] uppercase tracking-wider text-muted-foreground mb-1">Planning Notes</p>
                           {[
-                            `${heliXwLimit} kt crosswind limit applied (planning level).`,
+                            helipadUseCustomXw && effectiveHelipadXw != null
+                              ? `${effectiveHelipadXw.toFixed(1)} kt applied to FATO / approach wind analysis (custom override). Inherited reference: ${heliXwLimit} kt.`
+                              : `${heliXwLimit} kt crosswind limit applied (planning level).`,
                             "FATO heading should achieve ≥95% usability within this limit (ICAO Annex 14 Vol II §3.1.4).",
                             "Planning value only — operational limit defined in Flight Manual.",
                           ].map((note, i) => (
@@ -999,27 +1078,37 @@ const HeliportPage = () => {
                           </p>
                         </InstrumentCard>
 
-                        <InstrumentCard title="Marking Requirements (ICAO §5)">
+                        <InstrumentCard title="Marking & Lighting Requirements (GACAR Part 138 §3 / ICAO Annex 14 Vol II §5)">
                           <div className="space-y-1.5 text-[11px] font-mono-data text-muted-foreground">
                             {[
-                              "TLOF marking: white circle or square, 0.3 m stroke",
+                              "TLOF marking: white circle or square, 0.3 m stroke width",
                               "FATO boundary: white dashed line, 0.3 m wide",
-                              "Heliport identification: H marking, 3 m height",
-                              "TLOF perimeter light: yellow, 2 m spacing",
-                              "Aiming point: at centre of TLOF",
+                              "Heliport identification: H marking, 3 m height, white",
+                              "TLOF perimeter lights: white, equally spaced ≤ 3 m apart (GACAR Pt.138 §3)",
+                              "FATO perimeter lights: white or yellow, equally spaced ≤ 3 m apart",
+                              "Aiming point light: white, at centre of TLOF",
+                              "Floodlights: illuminate entire TLOF when operations at night",
                             ].map((s, i) => <p key={i} className="border-b border-border pb-1">▸ {s}</p>)}
                           </div>
+                          <p className="text-[9px] text-muted-foreground/60 mt-3 italic">
+                            GACAR Part 138 §(3) — Certification, Authorization and Operation of Heliports. ICAO Annex 14 Vol II §6.
+                          </p>
                         </InstrumentCard>
                       </div>
 
                       <div className="col-span-12 lg:col-span-6">
                         <InstrumentCard title="Obstacle Limitation Surfaces — ICAO Annex 14 Vol II §4">
                           <AeroDataTable
-                            columns={["Surface", "Slope", "Width/Half-width", "Clearway"]}
-                            rows={OLS_ROWS}
+                            columns={["Surface", "Slope", "Width / Half-width", "Applicability"]}
+                            rows={getOlsRows(heliType)}
                           />
+                          {heliType !== "surface" && (
+                            <div className="mt-2 px-2 py-1.5 border border-warning/30 bg-warning/5 rounded-sm text-[10px] font-mono-data text-warning">
+                              ⚠ Transitional Surface does NOT apply to {heliType} heliports — surface-level only (ICAO Annex 14 Vol II §4.2.7)
+                            </div>
+                          )}
                           <p className="text-[9px] text-muted-foreground/60 mt-3 italic">
-                            Planning reference only. Detailed OLS assessment per ICAO Doc 9261 required.
+                            Planning reference only. Detailed OLS assessment per ICAO Doc 9261 required. Conical Surface is not part of heliport OLS (applies to aerodromes only — ICAO Annex 14 Vol I).
                           </p>
                         </InstrumentCard>
                       </div>
@@ -1043,9 +1132,10 @@ const HeliportPage = () => {
                         {[
                           ["Project", projectName || "—"],
                           ["Location", projectLoc || "—"],
-                          ["Elevation", elevation ? `${elevation} m AMSL` : "—"],
+                          ["Elevation", elevation ? `${elevation} m MSL` : "—"],
                           ["Performance Class", `Class ${perfClass}`],
                           ["Heliport Type", heliType],
+                          ["Type of Helipad", helipadType],
                           ["Regulatory Basis", "ICAO Annex 14 Vol II / GACAR Part 138"],
                         ].map(([k, v]) => (
                           <div key={k as string} className="flex justify-between border-b border-border pb-1">
@@ -1065,7 +1155,8 @@ const HeliportPage = () => {
                             ["Reliability", parsedData.reliability.toUpperCase()],
                             ["Dataset Type", parsedData.datasetType],
                             ["Date Range", parsedData.dateRange ? `${parsedData.dateRange.start} → ${parsedData.dateRange.end}` : "—"],
-                            ["Prevailing Wind", prevailingWind ? `${prevailingWind.direction} (${prevailingWind.center}°) — ${prevailingWind.freq.toFixed(1)}%` : "—"],
+                            ["Peak wind sector", prevailingWind ? `${prevailingWind.direction} (${prevailingWind.center}°) — ${prevailingWind.freq.toFixed(1)}%` : "—"],
+                            ["Wind from (vector mean)", windFromVectorMean != null ? `${hdg(windFromVectorMean)}°` : "—"],
                             ["Calm Frequency", windRose ? `${windRose.calmFrequency.toFixed(1)}% (${windRose.calmCount.toLocaleString()} obs)` : "—"],
                           ].map(([k, v]) => (
                             <div key={k as string} className="flex justify-between border-b border-border pb-1">
@@ -1085,9 +1176,11 @@ const HeliportPage = () => {
                         <div className="grid grid-cols-2 gap-x-8 gap-y-1.5">
                           {[
                             ["Optimal FATO Heading", `${hdg(fatoResult.optimalHeading)}° / ${hdg((fatoResult.optimalHeading + 180) % 360)}°`],
+                            ["Crosswind limit (analysis)", effectiveHelipadXw != null ? `${effectiveHelipadXw.toFixed(1)} kt${helipadUseCustomXw ? " — custom" : ""}` : "—"],
+                            ["Primary inbound (headwind)", fatoResult.recommendedApproach != null ? `${hdg(fatoResult.recommendedApproach)}°` : "—"],
                             ["Wind Usability", fatoResult.usabilityPercent != null ? `${fatoResult.usabilityPercent.toFixed(2)}%` : "—"],
                             ["ICAO 95% Threshold", fatoResult.usabilityPercent != null ? (fatoResult.usabilityPercent >= 95 ? "✓ PASS" : "✗ BELOW 95%") : "—"],
-                            ["Prevailing Wind", fatoResult.prevailingWind != null ? `${hdg(fatoResult.prevailingWind)}°` : "—"],
+                            ["Wind from (vector mean)", fatoResult.prevailingWind != null ? `${hdg(fatoResult.prevailingWind)}°` : "—"],
                           ].map(([k, v]) => (
                             <div key={k as string} className="flex justify-between border-b border-border pb-1">
                               <span className="text-muted-foreground">{k as string}</span>
@@ -1105,8 +1198,8 @@ const HeliportPage = () => {
                       {approachResult ? (
                         <div className="grid grid-cols-2 gap-x-8 gap-y-1.5">
                           {[
-                            ["Prevailing Wind Dir", `${hdg(approachResult.prevailingDir)}° (${approachResult.approachLabel})`],
-                            ["Primary Approach", `${hdg(approachResult.approachDir)}° (into prevailing wind)`],
+                            ["Wind from (vector mean)", `${hdg(approachResult.prevailingDir)}° (${approachResult.approachLabel})`],
+                            ["Inbound track (headwind)", `${hdg(approachResult.approachDir)}°`],
                             ["Secondary Wind Dir", approachResult.secondaryDir != null ? `${hdg(approachResult.secondaryDir)}°` : "—"],
                             ["Cross-angle to Primary", approachResult.secondaryCrossAngle != null ? `${approachResult.secondaryCrossAngle.toFixed(0)}°${approachResult.secondaryCrossAngle > 60 ? " — omnidirectional FATO advised" : ""}` : "—"],
                             ["OLS Reference", "ICAO Annex 14 Vol II §3.4"],
@@ -1133,11 +1226,13 @@ const HeliportPage = () => {
                             ["D-Value", `${fmtLen(dVal)} ${lenUnit}`],
                             ["Rotor Ø", `${fmtLen(rotor)} ${lenUnit}`],
                             ["MTOW", `${fmtMass(helicopter.mtow_kg)} ${massUnit}`],
-                            ["Planning Crosswind Limit", heliXwLimit != null ? `${heliXwLimit} kt` : "—"],
+                            ["Planning Crosswind (inherited)", heliXwLimit != null ? `${heliXwLimit} kt` : "—"],
+                            ["Analysis crosswind applied", effectiveHelipadXw != null ? `${effectiveHelipadXw.toFixed(1)} kt${helipadUseCustomXw ? " (custom)" : ""}` : "—"],
                           ] : [
                             ["Selection Mode", "Generic Planning Category"],
                             ["Category", planningCategory || "—"],
-                            ["Planning Crosswind Limit", heliXwLimit != null ? `${heliXwLimit} kt` : "—"],
+                            ["Planning Crosswind (inherited)", heliXwLimit != null ? `${heliXwLimit} kt` : "—"],
+                            ["Analysis crosswind applied", effectiveHelipadXw != null ? `${effectiveHelipadXw.toFixed(1)} kt${helipadUseCustomXw ? " (custom)" : ""}` : "—"],
                             ["D-Value", dVal > 0 ? `${fmtLen(dVal)} ${lenUnit}` : "Not entered"],
                             ["Rotor Ø", rotor > 0 ? `${fmtLen(rotor)} ${lenUnit}` : "Not entered"],
                           ]).map(([k, v]) => (

@@ -16,7 +16,7 @@ import { AeroInput, AeroSelect } from "@/components/AeroInput";
 import AeroDataTable from "@/components/AeroDataTable";
 
 import { parseWindData, type ParsedWindData, type WindRecord } from "@/lib/windDataParser";
-import { calculateWindRose } from "@/lib/windRoseCalculator";
+import { calculateWindRose, windVectorMeanDirectionDeg } from "@/lib/windRoseCalculator";
 import { renderExecutiveWindRose, renderEngineeringWindRose, renderRunwayOverlayWindRose } from "@/lib/windRoseRenderer";
 import { calculateRunwayUsability, type RunwayUsabilityResult, optimizeRunwayOrientation, type OptimizationResult } from "@/lib/windComponents";
 import { aircraftDatabase, searchAircraft, filterByCategory, type AircraftData } from "@/data/aircraftDatabase";
@@ -24,7 +24,7 @@ import { loadSampleDataAsFile, SAMPLE_PRESETS } from "@/lib/sampleDataGenerator"
 import DataSourcesModule from "@/components/DataSourcesModule";
 import ScenarioComparison from "@/components/ScenarioComparison";
 import { DISCLAIMER, DATA_LABELS } from "@/lib/engineeringSafety";
-import { useAnalysis } from "@/contexts/AnalysisContext";
+import { useAnalysis, type WaterReportData } from "@/contexts/AnalysisContext";
 import { exportCSV } from "@/lib/exportUtils";
 
 // ── Tabs ──
@@ -43,6 +43,24 @@ const TABS = [
 type TabId = typeof TABS[number]["id"];
 
 const hdg = (d: number) => String(Math.round(((d % 360) + 360) % 360 || 360)).padStart(3, "0");
+
+function initWaterXwSelect(data: WaterReportData | null): string {
+  if (!data) return "10";
+  if (data.crosswindIsCustom || data.crosswindPreset === "custom") return "custom";
+  if (data.crosswindPreset && ["10", "13", "15"].includes(data.crosswindPreset)) return data.crosswindPreset;
+  const n = data.xwLimit;
+  if (n === 10) return "10";
+  if (n === 13) return "13";
+  if (n === 15) return "15";
+  return "custom";
+}
+
+function initWaterCustomXw(data: WaterReportData | null, select: string): string {
+  if (!data) return "";
+  if (data.crosswindCustomKt != null && String(data.crosswindCustomKt).trim() !== "") return String(data.crosswindCustomKt);
+  if (select === "custom" && Number.isFinite(data.xwLimit)) return String(data.xwLimit);
+  return "";
+}
 
 const WAVE_FACTORS: Record<string, number> = { calm: 1.0, smooth: 1.1, slight: 1.25, moderate: 1.4, rough: 2.0 };
 const BCOL = ["bg-primary", "bg-primary/70", "bg-warning", "bg-warning/70", "bg-destructive/60", "bg-primary/50", "bg-warning/50"];
@@ -77,7 +95,7 @@ const WaterRunwayPage = () => {
   const [windLoading, setWindLoading] = useState(false);
   const [windError, setWindError] = useState<string | null>(null);
   const [showSamples, setShowSamples] = useState(false);
-  const [calmThresh, setCalmThresh] = useState("3");
+  const [calmThresh, setCalmThresh] = useState("1");
   const [sectorType, setSectorType] = useState("22.5");
   const [monthFilter, setMonthFilter] = useState("all");
 
@@ -87,8 +105,11 @@ const WaterRunwayPage = () => {
   // Tab 3 — Orientation
   const [roseStyle, setRoseStyle] = useState<"executive" | "engineering">("executive");
   const [rwHeading, setRwHeading] = useState(waterReportData?.rwHeading || "360");
-  const [xwLimit, setXwLimit] = useState(waterReportData?.xwLimit ? String(waterReportData.xwLimit) : "10");
-  const [customXw, setCustomXw] = useState("");
+  const [xwLimit, setXwLimit] = useState(() => initWaterXwSelect(waterReportData));
+  const [customXw, setCustomXw] = useState(() => {
+    const sel = initWaterXwSelect(waterReportData);
+    return initWaterCustomXw(waterReportData, sel);
+  });
   const [candidates, setCandidates] = useState<RunwayUsabilityResult[]>(waterReportData?.candidates || []);
   const [optimization, setOptimization] = useState<OptimizationResult | null>(waterReportData?.optimization || null);
 
@@ -114,8 +135,8 @@ const WaterRunwayPage = () => {
     if (records.length === 0) return null;
     return calculateWindRose(records, {
       sectorSize: parseFloat(sectorType),
-      speedBins: [0, 5, 10, 15, 20, 25, 30, 35],
-      calmThreshold: parseFloat(calmThresh) || 3,
+      speedBins: [1, 4, 6, 10, 16, 21, 41],
+      calmThreshold: parseFloat(calmThresh) || 1,
       useGust: false,
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
@@ -127,6 +148,15 @@ const WaterRunwayPage = () => {
     const max = windRose.bins.reduce((a, b) => a.totalFrequency > b.totalFrequency ? a : b);
     return { direction: max.label, center: max.directionCenter, freq: max.totalFrequency };
   }, [windRose]);
+
+  const windFromVectorMean = useMemo(() => (windRose ? windVectorMeanDirectionDeg(windRose) : null), [windRose]);
+  const runwayAxisFromWindVector = useMemo(() => {
+    if (windFromVectorMean == null) return null;
+    const p = (((Math.round(windFromVectorMean) % 360) + 360) % 360) || 360;
+    const low = p > 180 ? p - 180 : p;
+    const high = (low + 180) % 360;
+    return { windFrom: p, low, high };
+  }, [windFromVectorMean]);
 
   const effectiveXw = xwLimit === "custom" ? parseFloat(customXw) || 12 : parseFloat(xwLimit);
 
@@ -155,18 +185,21 @@ const WaterRunwayPage = () => {
 
   const bestCandidate = candidates.length > 0 ? candidates.reduce((a, b) => a.usabilityPercent > b.usabilityPercent ? a : b) : null;
 
-  const { setWaterReportData: _set_unused } = useAnalysis();
   useEffect(() => {
     setWaterReportData({
       projName, projLoc, elevation, notes,
       windData: parsedData, windRose,
-      candidates, optimization, xwLimit: effectiveXw,
+      candidates, optimization,
+      xwLimit: effectiveXw,
+      crosswindIsCustom: xwLimit === "custom",
+      crosswindPreset: xwLimit === "custom" ? undefined : xwLimit,
+      crosswindCustomKt: xwLimit === "custom" ? customXw : undefined,
       rwHeading, selectedAc, waveState, waterType, waterTemp,
       channelType, availDepth, currentSpeed
     });
   }, [
     projName, projLoc, elevation, notes, parsedData, windRose,
-    candidates, optimization, effectiveXw, rwHeading, selectedAc,
+    candidates, optimization, effectiveXw, xwLimit, customXw, rwHeading, selectedAc,
     waveState, waterType, waterTemp, channelType, availDepth, currentSpeed,
     setWaterReportData
   ]);
@@ -271,7 +304,7 @@ const WaterRunwayPage = () => {
                     <div className="grid grid-cols-2 gap-4">
                       <AeroInput label="Facility Name (Planning)" placeholder="e.g. Red Sea Seaplane Base" value={projName} onChange={setProjName} />
                       <AeroInput label="Location / Coordinates" placeholder="e.g. 24.5°N 37.2°E" value={projLoc} onChange={setProjLoc} />
-                      <AeroInput label="Water Elevation" placeholder="0" unit="M AMSL" value={elevation} onChange={setElevation} />
+                      <AeroInput label="Water Elevation" placeholder="0" unit="M MSL" value={elevation} onChange={setElevation} />
                       <div className="space-y-1">
                         <label className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-mono-data">Project Notes</label>
                         <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={4} placeholder="Tidal variations, marine traffic…" className="aero-input w-full resize-none rounded-sm text-sm" />
@@ -380,9 +413,19 @@ const WaterRunwayPage = () => {
                 <div className="col-span-12 lg:col-span-4 space-y-4">
                   {prevailingWind && (
                     <div className="flex flex-col gap-1 p-4 bg-secondary/30 border border-border rounded-sm text-sm font-mono-data">
-                      <span className="text-foreground">Prevailing: <span className="text-cyan-400">{prevailingWind.direction} ({prevailingWind.center}°)</span></span>
+                      <span className="text-foreground">Peak sector: <span className="text-cyan-400">{prevailingWind.direction} ({prevailingWind.center}°)</span></span>
                       <span className="text-muted-foreground">·</span>
-                      <span className="text-foreground">Recommended heading: <span className="text-cyan-400">{hdg((prevailingWind.center + 180) % 360)}° / {hdg(prevailingWind.center)}°</span></span>
+                      <span className="text-foreground">
+                        {runwayAxisFromWindVector ? (
+                          <>
+                            Inbound (headwind): <span className="text-cyan-400">{hdg(runwayAxisFromWindVector.windFrom)}°</span>
+                            <span className="text-muted-foreground"> · </span>
+                            Channel axis: <span className="text-cyan-400">{hdg(runwayAxisFromWindVector.low)}° / {hdg(runwayAxisFromWindVector.high)}°</span>
+                          </>
+                        ) : (
+                          <>Axis (peak): <span className="text-cyan-400">{hdg(prevailingWind.center)}°</span></>
+                        )}
+                      </span>
                       {optimization && (
                         <><span className="text-muted-foreground">·</span><span className="text-foreground">Optimal: <span className="text-cyan-400">{hdg(optimization.bestHeading)}° — {optimization.bestUsability.toFixed(1)}% usability</span></span></>
                       )}
@@ -408,14 +451,14 @@ const WaterRunwayPage = () => {
               <div className="mt-8 space-y-8">
                 <OrientationOptimizer 
                   records={parsedData?.records || []} 
-                  limit={xwLimit !== "custom" ? Number(xwLimit) : (parseFloat(customXw) || 15)} 
+                  limit={effectiveXw} 
                   mode="water" 
                 />
                 <AdvancedWindAnalysis 
                   windRose={windRose || null} 
                   records={parsedData?.records || []} 
                   orientation={optimization?.bestHeading ?? (rwHeading !== "" ? parseFloat(rwHeading) : null)} 
-                  cwLimit={xwLimit !== "custom" ? Number(xwLimit) : (parseFloat(customXw) || 15)} 
+                  cwLimit={effectiveXw} 
                   mode="water" 
                   fileNamePrefix="water_runway" 
                 />
@@ -518,7 +561,7 @@ const WaterRunwayPage = () => {
                         <Map className="w-4 h-4 text-muted-foreground" />
                         <div>
                           <p className="text-xs">Elevation Factor: <strong className="text-cyan-400 font-mono-data">×{elevFactor.toFixed(2)}</strong></p>
-                          <p className="text-[10px] text-muted-foreground mt-0.5">+7% per 300m AMSL ({elevM}m)</p>
+                          <p className="text-[10px] text-muted-foreground mt-0.5">+7% per 300m MSL ({elevM}m)</p>
                         </div>
                       </div>
                     </div>
@@ -724,7 +767,7 @@ const WaterRunwayPage = () => {
                         {[
                           ["Facility", projName || "—"],
                           ["Location", projLoc || "—"],
-                          ["Water Elevation", elevation ? `${elevation} m AMSL` : "—"],
+                          ["Water Elevation", elevation ? `${elevation} m MSL` : "—"],
                           ["Water Body", waterType],
                         ].map(([k, v]) => (
                           <div key={k} className="flex justify-between border-b border-border pb-1">
@@ -759,7 +802,7 @@ const WaterRunwayPage = () => {
                         {[
                           ["Aligned Channel", optimization ? `${hdg(optimization.bestHeading)}° / ${hdg((optimization.bestHeading + 180) % 360)}°` : "—"],
                           ["Wind Coverage", optimization ? `${optimization.bestUsability.toFixed(2)}%` : "—"],
-                          ["Crosswind Limit", `${effectiveXw} kt`],
+                          ["Crosswind Limit", `${effectiveXw.toFixed(1)} kt${xwLimit === "custom" ? " (custom)" : ""}`],
                           ["Prevailing Wind", prevailingWind ? `${prevailingWind.direction} (${prevailingWind.center}°) — ${prevailingWind.freq.toFixed(1)}%` : "—"],
                         ].map(([k, v]) => (
                           <div key={k} className="flex justify-between border-b border-border pb-1">

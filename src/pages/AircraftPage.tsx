@@ -29,8 +29,8 @@ const AircraftPage = () => {
   const isMetric = units === "metric";
   const lenUnit = isMetric ? "m" : "ft";
   const massUnit = isMetric ? "kg" : "lbs";
-  const fmtLen = (m: number) => isMetric ? m.toFixed(1) : toFeet(m).toFixed(1);
-  const fmtMass = (kg: number) => isMetric ? kg.toLocaleString() : toLbs(kg).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const fmtLen = (m: number) => isMetric ? m.toFixed(2) : toFeet(m).toFixed(2);
+  const fmtMass = (kg: number) => isMetric ? kg.toFixed(2) : toLbs(kg).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const filteredAircraft = useMemo(() => {
     let data = searchAircraft(query, aircraftDatabase);

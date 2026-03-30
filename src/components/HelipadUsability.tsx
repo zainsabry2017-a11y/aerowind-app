@@ -4,7 +4,7 @@ import AeroDataTable from "@/components/AeroDataTable";
 import DataReadout from "@/components/DataReadout";
 import { AeroInput, AeroSelect } from "@/components/AeroInput";
 import { helicopterDatabase, type HelicopterData } from "@/data/aircraftDatabase";
-import { calculateRunwayUsability, optimizeRunwayOrientation, type RunwayUsabilityResult } from "@/lib/windComponents";
+import { calculateRunwayUsability, inboundHeadingForHeadwind, optimizeRunwayOrientation, type RunwayUsabilityResult } from "@/lib/windComponents";
 import { useAnalysis } from "@/contexts/AnalysisContext";
 import type { WindRoseResult } from "@/lib/windRoseCalculator";
 import type { WindRecord } from "@/lib/windDataParser";
@@ -19,12 +19,22 @@ export interface HelipadUsabilityResult {
 interface HelipadUsabilityProps {
   records: WindRecord[];
   windRose: WindRoseResult;
-  globalCrosswindLimit: number | null;
+  /** Inherited limit from helicopter / category (shown on “Inherited” button) */
+  inheritedCrosswindLimit: number | null;
+  /** Resolved limit (kt) for all usability math — parent computes from inherited vs custom */
+  effectiveCrosswindLimit: number;
+  useCustomCrosswindLimit: boolean;
+  onUseCustomCrosswindLimitChange: (v: boolean) => void;
+  customCrosswindLimit: string;
+  onCustomCrosswindLimitChange: (v: string) => void;
   globalHelicopterName: string | null;
   globalHelicopterIcao?: string;
   globalRotorDiameter?: number;
   globalDValue?: number;
   globalMtow?: number;
+  /** Must match Analysis Parameters / wind rose */
+  calmThresholdKts?: number;
+  useGust?: boolean;
   /** Optional — called whenever the best FATO heading or usability changes */
   onResult?: (result: HelipadUsabilityResult) => void;
 }
@@ -34,18 +44,16 @@ function formatHdg(deg: number): string {
   return String(Math.round(d)).padStart(3, "0");
 }
 
-const HelipadUsability = ({ records, windRose, globalCrosswindLimit, globalHelicopterName, globalHelicopterIcao, globalRotorDiameter, globalDValue, globalMtow, onResult }: HelipadUsabilityProps) => {
+const HelipadUsability = ({ records, windRose, inheritedCrosswindLimit, effectiveCrosswindLimit, useCustomCrosswindLimit, onUseCustomCrosswindLimitChange, customCrosswindLimit, onCustomCrosswindLimitChange, globalHelicopterName, globalHelicopterIcao, globalRotorDiameter, globalDValue, globalMtow, calmThresholdKts = 3, useGust = false, onResult }: HelipadUsabilityProps) => {
   const onResultRef = useRef(onResult);
   onResultRef.current = onResult;
   const analysis = useAnalysis();
   
   const [helipadHdg, setHelipadHdg] = useState("");
-  const [useCustomLimit, setUseCustomLimit] = useState(false);
-  const [customLimit, setCustomLimit] = useState("");
   const [candidates, setCandidates] = useState<RunwayUsabilityResult[]>([]);
   const [showOptimal, setShowOptimal] = useState(false);
 
-  const effectiveLimit = useCustomLimit ? (parseFloat(customLimit) || 15) : (globalCrosswindLimit || 15);
+  const effectiveLimit = effectiveCrosswindLimit;
 
   // Prevailing wind vector mean
   const prevailing = useMemo(() => {
@@ -60,20 +68,25 @@ const HelipadUsability = ({ records, windRose, globalCrosswindLimit, globalHelic
     return (((Math.atan2(sinSum, cosSum) * 180) / Math.PI) % 360 + 360) % 360;
   }, [windRose]);
 
-  const effectiveHdg = helipadHdg ? parseInt(helipadHdg) : Math.round((prevailing + 180) % 360) || 360;
+  // Default axis = low-number runway end (1–180°) along vector mean, matching the optimizer convention.
+  const pNorm = (((Math.round(prevailing) % 360) + 360) % 360) || 360;
+  const axisLowDefault = pNorm > 180 ? pNorm - 180 : pNorm;
+  const effectiveHdg = helipadHdg ? parseInt(helipadHdg) : axisLowDefault;
 
   const addCandidate = useCallback(() => {
+    if (inheritedCrosswindLimit === null && !useCustomCrosswindLimit) return;
     const h = effectiveHdg;
     if (isNaN(h) || h < 1 || h > 360) return;
-    const result = calculateRunwayUsability(records, h, effectiveLimit);
+    const result = calculateRunwayUsability(records, h, effectiveLimit, calmThresholdKts, useGust);
     setCandidates((prev) => [...prev.filter((c) => c.runwayHeading !== h), result]);
     if (!helipadHdg) setHelipadHdg(String(h));
-  }, [records, effectiveHdg, effectiveLimit, helipadHdg]);
+  }, [records, effectiveHdg, effectiveLimit, helipadHdg, calmThresholdKts, useGust, inheritedCrosswindLimit, useCustomCrosswindLimit]);
 
   const optimization = useMemo(() => {
     if (!showOptimal) return null;
-    return optimizeRunwayOrientation(records, effectiveLimit);
-  }, [records, effectiveLimit, showOptimal]);
+    if (inheritedCrosswindLimit === null && !useCustomCrosswindLimit) return null;
+    return optimizeRunwayOrientation(records, effectiveLimit, calmThresholdKts, useGust);
+  }, [records, effectiveLimit, showOptimal, calmThresholdKts, useGust, inheritedCrosswindLimit, useCustomCrosswindLimit]);
 
   const bestCandidate = candidates.length > 0
     ? candidates.reduce((a, b) => (a.usabilityPercent > b.usabilityPercent ? a : b))
@@ -83,7 +96,7 @@ const HelipadUsability = ({ records, windRose, globalCrosswindLimit, globalHelic
   useEffect(() => {
     const heading    = optimization?.bestHeading    ?? bestCandidate?.runwayHeading   ?? null;
     const usability  = optimization?.bestUsability  ?? bestCandidate?.usabilityPercent ?? null;
-    const approach   = heading !== null ? (heading + 180) % 360 : null;
+    const approach   = heading !== null ? inboundHeadingForHeadwind(prevailing, heading) : null;
     onResultRef.current?.({ optimalHeading: heading, usabilityPercent: usability, recommendedApproach: approach, prevailingWind: prevailing });
   }, [optimization, bestCandidate, prevailing]);
 
@@ -95,12 +108,18 @@ const HelipadUsability = ({ records, windRose, globalCrosswindLimit, globalHelic
       rotorDiameter: globalRotorDiameter ?? 0,
       dValue: globalDValue ?? 0,
       mtow: globalMtow ?? 0,
+      crosswindLimitKt: effectiveCrosswindLimit,
+      crosswindLimitInheritedKt: inheritedCrosswindLimit,
+      crosswindLimitIsCustom: useCustomCrosswindLimit,
       optimalHeading: optimization?.bestHeading ?? null,
       usabilityPercent: bestCandidate?.usabilityPercent ?? optimization?.bestUsability ?? null,
       prevailingWind: prevailing,
-      recommendedApproach: (prevailing + 180) % 360,
+      recommendedApproach: (() => {
+        const axis = optimization?.bestHeading ?? bestCandidate?.runwayHeading ?? null;
+        return axis != null ? inboundHeadingForHeadwind(prevailing, axis) : prevailing;
+      })(),
     });
-  }, [globalHelicopterName, globalHelicopterIcao, globalRotorDiameter, globalDValue, globalMtow, optimization, bestCandidate, prevailing]);
+  }, [globalHelicopterName, globalHelicopterIcao, globalRotorDiameter, globalDValue, globalMtow, effectiveCrosswindLimit, inheritedCrosswindLimit, useCustomCrosswindLimit, optimization, bestCandidate, prevailing]);
 
   const tableRows = candidates.map((c) => [
     `${formatHdg(c.runwayHeading)}°`,
@@ -110,11 +129,11 @@ const HelipadUsability = ({ records, windRose, globalCrosswindLimit, globalHelic
     c.meets95 ? "✓ PASS" : "✗ FAIL",
   ]);
 
-  if (globalCrosswindLimit === null && !useCustomLimit) {
+  if (inheritedCrosswindLimit === null && !useCustomCrosswindLimit) {
     return (
       <div className="flex flex-col items-center justify-center py-10 border border-border rounded-sm text-center px-4 gap-2">
         <p className="text-sm text-muted-foreground">Waiting for Helicopter Selection</p>
-        <p className="text-[10px] text-muted-foreground/60 font-mono-data">Select a helicopter or generic planning category in Tab 6 to define the crosswind limit</p>
+        <p className="text-[10px] text-muted-foreground/60 font-mono-data">Select a helicopter or generic planning category in Tab 6, or choose Custom Limit above</p>
       </div>
     );
   }
@@ -129,33 +148,38 @@ const HelipadUsability = ({ records, windRose, globalCrosswindLimit, globalHelic
         )}
 
         {/* FATO / approach heading */}
-        <AeroInput label="FATO / Approach Heading" placeholder={`${formatHdg(effectiveHdg)}° (from prevailing wind)`} unit="°" value={helipadHdg} onChange={setHelipadHdg} />
+        <AeroInput label="FATO axis (1–180° designator)" placeholder={`${formatHdg(effectiveHdg)}° (from vector mean)`} unit="°" value={helipadHdg} onChange={setHelipadHdg} />
 
         <div className="flex flex-col gap-1.5 pt-2">
           <label className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-mono-data">Analysis Crosswind Limit</label>
           <div className="flex gap-2">
             <button 
-              onClick={() => setUseCustomLimit(false)}
-              className={`flex-1 py-1.5 text-xs font-mono-data rounded-sm border transition-colors ${!useCustomLimit ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground hover:bg-secondary/20"}`}
+              type="button"
+              onClick={() => onUseCustomCrosswindLimitChange(false)}
+              className={`flex-1 py-1.5 text-xs font-mono-data rounded-sm border transition-colors ${!useCustomCrosswindLimit ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground hover:bg-secondary/20"}`}
             >
-              Inherited ({globalCrosswindLimit ?? "—"} kt)
+              Inherited ({inheritedCrosswindLimit ?? "—"} kt)
             </button>
             <button 
-              onClick={() => setUseCustomLimit(true)}
-              className={`flex-1 py-1.5 text-xs font-mono-data rounded-sm border transition-colors ${useCustomLimit ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground hover:bg-secondary/20"}`}
+              type="button"
+              onClick={() => onUseCustomCrosswindLimitChange(true)}
+              className={`flex-1 py-1.5 text-xs font-mono-data rounded-sm border transition-colors ${useCustomCrosswindLimit ? "bg-primary/10 border-primary text-primary" : "border-border text-muted-foreground hover:bg-secondary/20"}`}
             >
               Custom Limit
             </button>
           </div>
-          {useCustomLimit && (
-            <div className="mt-2 text-warning text-[10px] font-mono-data border border-warning/30 bg-warning/5 rounded-sm p-2 flex items-center justify-between">
-              <span>⚠ Overriding reference limit</span>
-              <div className="w-1/2">
+          {useCustomCrosswindLimit && (
+            <div className="mt-2 text-warning text-[10px] font-mono-data border border-warning/30 bg-warning/5 rounded-sm p-2 flex items-center justify-between gap-2">
+              <span>⚠ Overriding reference limit — applies to FATO optimization and reports</span>
+              <div className="w-1/2 shrink-0">
                 <input 
                   type="number" 
-                  value={customLimit} 
-                  onChange={(e) => setCustomLimit(e.target.value)}
-                  placeholder="20"
+                  min={1}
+                  max={99}
+                  step={0.5}
+                  value={customCrosswindLimit} 
+                  onChange={(e) => onCustomCrosswindLimitChange(e.target.value)}
+                  placeholder={String(inheritedCrosswindLimit ?? 15)}
                   className="w-full bg-background border border-border rounded-sm px-2 py-1 text-xs"
                 />
               </div>
@@ -183,8 +207,8 @@ const HelipadUsability = ({ records, windRose, globalCrosswindLimit, globalHelic
           <p className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground">Recommended Approach (into wind)</p>
           <div className="p-3 bg-primary/5 border border-primary/20 rounded-sm">
             <div className="flex items-baseline gap-2">
-              <span className="text-xl font-display text-primary">{formatHdg((prevailing + 180) % 360)}°</span>
-              <span className="text-xs text-muted-foreground">approach into prevailing {formatHdg(prevailing)}° wind</span>
+              <span className="text-xl font-display text-primary">{formatHdg(prevailing)}°</span>
+              <span className="text-xs text-muted-foreground">inbound with headwind (wind from {formatHdg(prevailing)}°, vector mean)</span>
             </div>
           </div>
         </div>

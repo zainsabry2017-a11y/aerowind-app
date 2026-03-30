@@ -96,7 +96,7 @@ const RunwayLengthPage = () => {
             <InstrumentCard title="Airport Parameters">
               <div className="space-y-4">
                 <AeroInput label="Base Runway Length" placeholder="1800" unit="M" value={baseLength} onChange={setBaseLength} />
-                <AeroInput label="Aerodrome Elevation" placeholder="400" unit="M AMSL" value={elevation} onChange={setElevation} />
+                <AeroInput label="Aerodrome Elevation" placeholder="400" unit="M MSL" value={elevation} onChange={setElevation} />
                 <AeroInput label="Reference Temperature" placeholder="40" unit="°C" value={temperature} onChange={setTemperature} />
                 <AeroInput label="Effective Gradient" placeholder="1.0" unit="%" value={gradient} onChange={setGradient} />
                 <AeroSelect label="Surface Condition" value={surface} onChange={setSurface} options={[

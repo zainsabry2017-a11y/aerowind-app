@@ -4,7 +4,7 @@
 
 export interface RunwayLengthInputs {
   baseLength: number;           // metres
-  airportElevation: number;     // metres AMSL
+  airportElevation: number;     // metres MSL
   referenceTemperature: number; // °C (ICAO reference temp concept)
   effectiveGradient: number;    // percent
   surfaceCondition: "paved" | "turf" | "gravel";
@@ -49,7 +49,7 @@ export function calculateRunwayLength(inputs: RunwayLengthInputs): RunwayLengthR
     label: "Elevation",
     factor: elevFactor,
     addedLength: baseLength * (elevFactor - 1),
-    description: `+7% per 300 m elevation (ICAO Doc 9157) — ${airportElevation.toLocaleString()} m AMSL`,
+    description: `+7% per 300 m elevation (ICAO Doc 9157) — ${airportElevation.toLocaleString()} m MSL`,
   });
   length = baseLength * elevFactor;
 

@@ -26,7 +26,7 @@ import { Wind, Download, Database } from "lucide-react";
 const WindRosePage = () => {
   const analysis = useAnalysis();
   const [parsedData, setParsedData] = useState<ParsedWindData | null>(null);
-  const [calmThreshold, setCalmThreshold] = useState("3");
+  const [calmThreshold, setCalmThreshold] = useState("1");
   const [sectorType, setSectorType] = useState("22.5");
   const [useGust, setUseGust] = useState("no");
   const [monthFilter, setMonthFilter] = useState("all");
@@ -40,6 +40,8 @@ const WindRosePage = () => {
   const [adjDirOffset, setAdjDirOffset] = useState("0");
   const [adjSpdOffset, setAdjSpdOffset] = useState("0");
 
+  const [helipadUseCustomXw, setHelipadUseCustomXw] = useState(false);
+  const [helipadCustomXw, setHelipadCustomXw] = useState("");
   const [showPublicPanel, setShowPublicPanel] = useState(false);
   const [publicCity, setPublicCity] = useState("");
   const [publicCountry, setPublicCountry] = useState("");
@@ -52,7 +54,7 @@ const WindRosePage = () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await parseWindData(file, parseFloat(calmThreshold) || 3);
+      const data = await parseWindData(file, parseFloat(calmThreshold) || 1);
       setParsedData(data);
     } catch (err: any) {
       setError(err.message || "Failed to parse file");
@@ -69,7 +71,7 @@ const WindRosePage = () => {
       const lon = parseFloat(publicLon);
       const latlon = !isNaN(lat) && !isNaN(lon) ? `${lat},${lon}` : "";
       const result = await fetchAndParseMeteostat(publicCity.trim(), publicCountry.trim(), latlon, publicStart.trim(), publicEnd.trim());
-      const converted = parsedWindDataFromNormalizedPublicData(result, parseFloat(calmThreshold) || 3);
+      const converted = parsedWindDataFromNormalizedPublicData(result, parseFloat(calmThreshold) || 1);
       setParsedData(converted);
       setShowPublicPanel(false);
     } catch (err: any) {
@@ -94,7 +96,7 @@ const WindRosePage = () => {
 
   const effectiveParsedData = useMemo<ParsedWindData | null>(() => {
     if (!parsedData) return null;
-    const calm = parseFloat(calmThreshold) || 3;
+    const calm = parseFloat(calmThreshold) || 1;
     const records = applyWindAdjustments(parsedData.records, calm, {
       enabled: adjEnabled,
       directionOffsetDeg: parseFloat(adjDirOffset) || 0,
@@ -110,12 +112,22 @@ const WindRosePage = () => {
     return calculateWindRose(effectiveParsedData.records, {
       ...DEFAULT_WIND_ROSE_OPTIONS,
       sectorSize: parseFloat(sectorType),
-      calmThreshold: parseFloat(calmThreshold) || 3,
+      calmThreshold: parseFloat(calmThreshold) || 1,
       useGust: useGust === "yes",
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
     });
   }, [effectiveParsedData, sectorType, calmThreshold, useGust, monthFilter]);
+
+  const inheritedHelipadXw = 15;
+  const effectiveHelipadWindRose = useMemo(() => {
+    if (helipadUseCustomXw) {
+      const c = parseFloat(helipadCustomXw.trim());
+      if (Number.isFinite(c) && c > 0) return Math.min(c, 99);
+      return inheritedHelipadXw;
+    }
+    return inheritedHelipadXw;
+  }, [helipadUseCustomXw, helipadCustomXw]);
 
   // Sync to shared analysis context
   useEffect(() => { analysis.setWindData(effectiveParsedData); }, [effectiveParsedData]);
@@ -306,7 +318,7 @@ const WindRosePage = () => {
 
             <InstrumentCard title="Parameters">
               <div className="space-y-4">
-                <AeroInput label="Calm Threshold" placeholder="3.0" unit="KTS" value={calmThreshold} onChange={setCalmThreshold} />
+                <AeroInput label="Calm Threshold" placeholder="1.0" unit="KTS" value={calmThreshold} onChange={setCalmThreshold} />
                 <AeroSelect label="Sector Size" value={sectorType} onChange={setSectorType} options={[
                   { value: "10", label: "10° (36 sectors)" },
                   { value: "15", label: "15° (24 sectors)" },
@@ -408,7 +420,19 @@ const WindRosePage = () => {
                 <ApproachAdvisor windRose={windRose} />
 
                 {/* Helipad Usability Analysis */}
-                <HelipadUsability records={parsedData!.records} windRose={windRose} />
+                <HelipadUsability
+                  records={effectiveParsedData!.records}
+                  windRose={windRose}
+                  inheritedCrosswindLimit={inheritedHelipadXw}
+                  effectiveCrosswindLimit={effectiveHelipadWindRose}
+                  useCustomCrosswindLimit={helipadUseCustomXw}
+                  onUseCustomCrosswindLimitChange={setHelipadUseCustomXw}
+                  customCrosswindLimit={helipadCustomXw}
+                  onCustomCrosswindLimitChange={setHelipadCustomXw}
+                  globalHelicopterName={null}
+                  calmThresholdKts={Number.isFinite(parseFloat(calmThreshold)) ? parseFloat(calmThreshold) : 1}
+                  useGust={useGust === "yes"}
+                />
 
                 {/* Crosswind Calculator */}
                 <CrosswindCalculator

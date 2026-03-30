@@ -20,12 +20,14 @@ export default function ScenarioComparison(props: {
   sectorSizeDeg?: number;
   monthFilter?: number[] | null;
   useGust?: boolean;
+  /** Calm threshold (kt) applied to orientation optimization rows; default 3 */
+  orientationCalmKts?: number;
 }) {
-  const { records, sectorSizeDeg = 22.5, monthFilter = null, useGust = false } = props;
-  const [calmList, setCalmList] = useState("0, 3, 5");
+  const { records, sectorSizeDeg = 22.5, monthFilter = null, useGust = false, orientationCalmKts = 3 } = props;
+  const [calmList, setCalmList] = useState("0, 3, 4");
   const [xwList, setXwList] = useState("10, 13, 15, 17, 20");
 
-  const calmThresholds = useMemo(() => parseList(calmList, [0, 3, 5]).slice(0, 8), [calmList]);
+  const calmThresholds = useMemo(() => parseList(calmList, [0, 3, 4]).slice(0, 8), [calmList]);
   const crosswindLimits = useMemo(() => parseList(xwList, [10, 13, 20]).slice(0, 8), [xwList]);
 
   const calmRows = useMemo(() => {
@@ -52,7 +54,7 @@ export default function ScenarioComparison(props: {
   const xwRows = useMemo(() => {
     if (!records.length) return [];
     return crosswindLimits.map((lim) => {
-      const opt = optimizeRunwayOrientation(records, lim);
+      const opt = optimizeRunwayOrientation(records, lim, orientationCalmKts, useGust);
       return [
         `${lim.toFixed(1)} kt`,
         opt.bestHeading == null ? "—" : `${hdg(opt.bestHeading)}°/${hdg((opt.bestHeading + 180) % 360)}°`,
@@ -60,7 +62,7 @@ export default function ScenarioComparison(props: {
         `${opt.top5?.[0]?.usability?.toFixed?.(1) ?? opt.bestUsability.toFixed(1)}%`,
       ];
     });
-  }, [records, crosswindLimits]);
+  }, [records, crosswindLimits, orientationCalmKts, useGust]);
 
   return (
     <InstrumentCard title="Scenario Engine (Side-by-Side)" accentColor="primary">
