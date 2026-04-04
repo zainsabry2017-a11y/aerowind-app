@@ -13,6 +13,7 @@ import HelipadUsability from "@/components/HelipadUsability";
 import { AeroInput, AeroSelect } from "@/components/AeroInput";
 import { parseWindData, parsedWindDataFromNormalizedPublicData, type ParsedWindData } from "@/lib/windDataParser";
 import { calculateWindRose, DEFAULT_WIND_ROSE_OPTIONS, type WindRoseResult } from "@/lib/windRoseCalculator";
+import { windDirectionReferenceTableRows } from "@/lib/windDirectionSectors";
 import { generateSafetyWarnings, DATA_LABELS, getConfidenceLevel } from "@/lib/engineeringSafety";
 import { renderExecutiveWindRose, renderEngineeringWindRose } from "@/lib/windRoseRenderer";
 import { exportCSV, exportSVGAsPNG } from "@/lib/exportUtils";
@@ -21,6 +22,7 @@ import { useAnalysis } from "@/contexts/AnalysisContext";
 import { fetchAndParseMeteostat } from "@/lib/publicWeatherParser";
 import { applyWindAdjustments } from "@/lib/windAdjustments";
 import CoordinatePickerMap from "@/components/CoordinatePickerMap";
+import WindDataQADashboard from "@/components/WindDataQADashboard";
 import { Wind, Download, Database } from "lucide-react";
 
 const WindRosePage = () => {
@@ -153,6 +155,11 @@ const WindRosePage = () => {
       b.speedBins.map((s) => s.count).reduce((a, c) => a + c, 0).toString(),
     ]);
   }, [windRose]);
+
+  const importDegreeRefRows = useMemo(
+    () => windDirectionReferenceTableRows(parseFloat(sectorType) || 22.5),
+    [sectorType]
+  );
 
   const handleExportCSV = () => {
     if (!windRose) return;
@@ -316,6 +323,8 @@ const WindRosePage = () => {
               )}
             </InstrumentCard>
 
+            {effectiveParsedData && <WindDataQADashboard data={effectiveParsedData} />}
+
             <InstrumentCard title="Parameters">
               <div className="space-y-4">
                 <AeroInput label="Calm Threshold" placeholder="1.0" unit="KTS" value={calmThreshold} onChange={setCalmThreshold} />
@@ -388,6 +397,22 @@ const WindRosePage = () => {
               <>
                 <InstrumentCard title="Wind Frequency by Direction">
                   <AeroDataTable columns={["Direction", "Center (°)", "Frequency (%)", "Observations"]} rows={tableRows} />
+                  {importDegreeRefRows.length > 0 ? (
+                    <div className="mt-4 pt-4 border-t border-border">
+                      <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground font-mono-data mb-1">
+                        File import (degrees → sector)
+                      </p>
+                      <p className="text-[9px] text-muted-foreground mb-2 leading-snug">
+                        Values from your direction column (0–360°, wind from) are counted in the sector whose center is nearest — same rule as the rose.{" "}
+                        <span className="font-mono-data text-foreground/80">0°</span> and{" "}
+                        <span className="font-mono-data text-foreground/80">360°</span> are North.
+                      </p>
+                      <AeroDataTable
+                        columns={["Direction", "Center (°)", "Degree band (import)"]}
+                        rows={importDegreeRefRows}
+                      />
+                    </div>
+                  ) : null}
                 </InstrumentCard>
 
                 <InstrumentCard title="Wind Speed Distribution Summary">

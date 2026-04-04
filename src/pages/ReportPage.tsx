@@ -13,6 +13,7 @@ import { renderExecutiveWindRose, renderEngineeringWindRose } from "@/lib/windRo
 import { useLocation } from "react-router-dom";
 import { DEFAULT_WIND_ROSE_OPTIONS } from "@/lib/windRoseCalculator";
 import { effectiveRunwayCrosswindKt, runwayCrosswindReportLabel } from "@/lib/runwayReportCrosswind";
+import { formatDimM } from "@/data/aircraftDatabase";
 
 
 // ── Helpers ──
@@ -197,8 +198,8 @@ const HeliportReportBlock = ({ data, opts, numPrefix = "" }: { data: HeliportRep
         ["Type of Helipad", helipadType || "—"],
         ["Reference Helicopter", helipad?.helicopter?.model ? `${helipad.helicopter.manufacturer} ${helipad.helicopter.model}` : planningCategory || "—"],
         ["MTOW", v(mtow || helipad?.helicopter?.mtow_kg?.toLocaleString(), " kg")],
-        ["D-Value", v(dValue || helipad?.dVal?.toFixed(1), " m")],
-        ["Rotor Diameter", v(rotorDia || helipad?.rotor?.toFixed(1), " m")]
+        ["D-Value", v(dValue || (helipad?.dVal != null ? formatDimM(helipad.dVal) : ""), " m")],
+        ["Rotor Diameter", v(rotorDia || (helipad?.rotor != null ? formatDimM(helipad.rotor) : ""), " m")]
       ]} />
 
       <SectionHeading num={`${numPrefix}3`} title="FATO & Approach Orientation" />
@@ -212,8 +213,8 @@ const HeliportReportBlock = ({ data, opts, numPrefix = "" }: { data: HeliportRep
 
       <SectionHeading num={`${numPrefix}4`} title="Geometry Guidance (Minimum)" />
       <MetaTable rows={[
-        ["FATO Dimensions", v(dValue || helipad?.dVal?.toFixed(1), " m × ") + v(dValue || helipad?.dVal?.toFixed(1), " m")],
-        ["Safety Area Clearance", v(((parseFloat(dValue) || helipad?.dVal || 0) * 1.5).toFixed(1), " m from edge")],
+        ["FATO Dimensions", v(dValue || (helipad?.dVal != null ? formatDimM(helipad.dVal) : ""), " m × ") + v(dValue || (helipad?.dVal != null ? formatDimM(helipad.dVal) : ""), " m")],
+        ["Safety Area Clearance", v(formatDimM((parseFloat(dValue) || helipad?.dVal || 0) * 1.5), " m from edge")],
       ]} />
       {opts.includeWarnings && (
         <div className="p-4 bg-amber-500/10 border-l-2 border-l-amber-500 text-sm text-amber-800 dark:text-amber-300 mt-2 mb-6">
@@ -594,8 +595,8 @@ const ReportPage = () => {
     // ── Heliport section ──
     if ((reportType === "combined" || reportType === "heliport") && heliportReportData) {
       const d = heliportReportData;
-      const dVal = d.dValue || d.helipad?.dVal?.toFixed(1) || "—";
-      const rotor = d.rotorDia || d.helipad?.rotor?.toFixed(1) || "—";
+      const dVal = d.dValue || (d.helipad?.dVal != null ? formatDimM(d.helipad.dVal) : "") || "—";
+      const rotor = d.rotorDia || (d.helipad?.rotor != null ? formatDimM(d.helipad.rotor) : "") || "—";
       const mtowVal = d.mtow || d.helipad?.helicopter?.mtow_kg?.toLocaleString() || "—";
       body += pageBreak;
       body += blockHeader("#fef9c3", "#d97706", "Heliport Facility Assessment", `${d.projName || d.projectLoc || "Unnamed Project"} — Performance Class ${d.perfClass}`);
@@ -629,7 +630,7 @@ const ReportPage = () => {
       body += kv([
         ["FATO Dimensions", `${V(dVal)} m × ${V(dVal)} m`],
         ["TLOF (Touchdown)", `${V(dVal)} m × ${V(dVal)} m`],
-        ["Safety Area Clearance", `${V(((parseFloat(String(dVal)) || 0) * 1.5).toFixed(1))} m from FATO edge`],
+        ["Safety Area Clearance", `${V(formatDimM((parseFloat(String(dVal)) || d.helipad?.dVal || 0) * 1.5))} m from FATO edge`],
         ["Obstacle Limitation Surface", "1:5 approach slope per ICAO Annex 14 Vol II"],
       ]);
       if (opts.includeWarnings) body += note("amber", "Warning: Heliport OLS surveys must confirm a 1:5 or 1:10 approach flight path based on classification. Wind-derived orientation does not account for physical landscape obstacles.");

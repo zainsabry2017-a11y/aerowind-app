@@ -1,4 +1,4 @@
-import type { WindRecord } from "./windDataParser";
+import { getObservationCalendarMonth1to12, type WindRecord } from "./windDataParser";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -61,14 +61,7 @@ function getSpeedLabel(min: number, max: number): string {
 // ── Month extraction ───────────────────────────────────
 
 function getMonth(record: WindRecord): number | null {
-  if (!record.observation_date) return null;
-  const d = new Date(record.observation_date);
-  if (isNaN(d.getTime())) {
-    const m = record.observation_date.match(/(\d{1,2})[/\-](\d{1,2})/);
-    if (m) return parseInt(m[1]);
-    return null;
-  }
-  return d.getMonth() + 1;
+  return getObservationCalendarMonth1to12(record);
 }
 
 // ── Main wind rose calculator ──────────────────────────

@@ -1,18 +1,11 @@
 import { useMemo } from "react";
 import InstrumentCard from "@/components/InstrumentCard";
-import type { ParsedWindData } from "@/lib/windDataParser";
+import { CALENDAR_MONTHS, METEOROLOGICAL_SEASONS, sumMonthCountsForSeason } from "@/lib/windCalendarLabels";
+import { getObservationUtcMonthIndex0, type ParsedWindData } from "@/lib/windDataParser";
 
 function pct(n: number, d: number) {
   if (!d) return "—";
   return ((n / d) * 100).toFixed(1) + "%";
-}
-
-function monthName(i: number) {
-  try {
-    return new Date(2000, i, 1).toLocaleString("en", { month: "short" });
-  } catch {
-    return String(i + 1);
-  }
 }
 
 export default function WindDataQADashboard(props: { data: ParsedWindData }) {
@@ -33,10 +26,18 @@ export default function WindDataQADashboard(props: { data: ParsedWindData }) {
     const outGust = gusts.filter((g) => g >= 70).length;
 
     const monthCounts = Array.from({ length: 12 }, () => 0);
+    let monthUnknown = 0;
     for (const r of data.records) {
-      const d = new Date(`${r.observation_date}T00:00:00Z`);
-      if (!isNaN(d.getTime())) monthCounts[d.getUTCMonth()]++;
+      const mi = getObservationUtcMonthIndex0(r);
+      if (mi === null) monthUnknown++;
+      else monthCounts[mi]++;
     }
+    const seasonCounts = [0, 1, 2, 3].map((i) => sumMonthCountsForSeason(monthCounts, i)) as [
+      number,
+      number,
+      number,
+      number,
+    ];
     const monthTotal = monthCounts.reduce((a, b) => a + b, 0);
     const nonZeroMonths = monthCounts.filter((c) => c > 0).length;
     const expected = monthTotal ? monthTotal / Math.max(1, nonZeroMonths) : 0;
@@ -67,6 +68,8 @@ export default function WindDataQADashboard(props: { data: ParsedWindData }) {
       nonZeroMonths,
       bias,
       confidenceGrade,
+      monthUnknown,
+      seasonCounts,
     };
   }, [data]);
 
@@ -97,13 +100,49 @@ export default function WindDataQADashboard(props: { data: ParsedWindData }) {
 
       <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="p-3 border border-border rounded-sm">
-          <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground font-mono-data mb-2">Season / month coverage</p>
-          <div className="grid grid-cols-4 gap-2">
-            {qa.monthCounts.map((c, i) => (
-              <div key={i} className="border border-border rounded-sm px-2 py-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-mono-data text-muted-foreground">{monthName(i)}</span>
-                  <span className="text-[10px] font-mono-data text-foreground">{c}</span>
+          <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground font-mono-data mb-1">
+            Season / month coverage
+          </p>
+          <p className="text-[9px] text-muted-foreground/80 mb-2 leading-snug">
+            Rows are counted by calendar month from your file (column <span className="text-foreground/90">Month</span> / date).
+            Month <span className="font-mono-data">1</span> = January, <span className="font-mono-data">2</span> = February, …{" "}
+            <span className="font-mono-data">12</span> = December.
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 [grid-auto-rows:1fr]">
+            {CALENDAR_MONTHS.map((m, i) => {
+              const shortName = new Date(2000, i, 1).toLocaleString("en", { month: "short" });
+              return (
+                <div
+                  key={m.num}
+                  className="flex min-h-[4.5rem] min-w-0 flex-col justify-between gap-1.5 overflow-hidden rounded-sm border border-border bg-card/30 px-2.5 py-2"
+                >
+                  <div className="min-w-0 text-[9px] font-mono-data leading-tight text-muted-foreground">
+                    <span className="tabular-nums text-foreground/90">{m.num}</span>
+                    <span className="mx-1 opacity-40">·</span>
+                    <span className="break-words">{shortName}</span>
+                  </div>
+                  <p className="text-right text-sm font-mono-data tabular-nums leading-none tracking-tight text-foreground">
+                    {qa.monthCounts[i].toLocaleString()}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+            {METEOROLOGICAL_SEASONS.map((s, i) => (
+              <div
+                key={s.label}
+                className="flex min-h-[4.75rem] min-w-0 flex-col gap-2 overflow-hidden rounded-sm border border-border bg-card/30 px-3 py-2.5 sm:flex-row sm:items-stretch sm:justify-between sm:gap-3"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] font-mono-data text-foreground">{s.label}</p>
+                  <p className="mt-1 text-[9px] leading-snug text-muted-foreground">{s.monthsNamed}</p>
+                </div>
+                <div className="shrink-0 border-t border-border pt-2 sm:flex sm:flex-col sm:justify-center sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0 sm:text-right">
+                  <p className="text-[8px] uppercase tracking-[0.14em] text-muted-foreground">Rows</p>
+                  <p className="mt-0.5 text-sm font-mono-data tabular-nums text-foreground sm:mt-1">
+                    {qa.seasonCounts[i].toLocaleString()}
+                  </p>
                 </div>
               </div>
             ))}
@@ -111,6 +150,12 @@ export default function WindDataQADashboard(props: { data: ParsedWindData }) {
           <p className="mt-2 text-[10px] text-muted-foreground">
             Non-empty months: <span className="text-foreground font-mono-data">{qa.nonZeroMonths}/12</span> • Season bias index:{" "}
             <span className="text-foreground font-mono-data">{qa.bias ? qa.bias.toFixed(2) : "—"}</span>
+            {qa.monthUnknown > 0 ? (
+              <>
+                {" "}
+                • <span className="text-warning">{qa.monthUnknown.toLocaleString()} row(s) with unknown month</span>
+              </>
+            ) : null}
           </p>
         </div>
 

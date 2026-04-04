@@ -31,7 +31,7 @@ import { OrientationOptimizer } from "@/components/OrientationOptimizer";
 import HelipadUsability, { type HelipadUsabilityResult } from "@/components/HelipadUsability";
 import ApproachAdvisor, { type ApproachAnalysisResult } from "@/components/ApproachAdvisor";
 import { AeroSelect, AeroInput } from "@/components/AeroInput";
-import { helicopterDatabase, planningCrosswindLimitForHelicopter, toFeet, toLbs, type HelicopterData } from "@/data/aircraftDatabase";
+import { helicopterDatabase, planningCrosswindLimitForHelicopter, formatDimM, toFeet, toLbs, type HelicopterData } from "@/data/aircraftDatabase";
 import { DISCLAIMER, HELIPORT_DISCLAIMER, DATA_LABELS } from "@/lib/engineeringSafety";
 import { parseWindData, type ParsedWindData, type WindRecord } from "@/lib/windDataParser";
 import { calculateWindRose, DEFAULT_WIND_ROSE_OPTIONS, windVectorMeanDirectionDeg, type WindRoseResult } from "@/lib/windRoseCalculator";
@@ -143,7 +143,7 @@ const HeliportPage = () => {
     (selectionMode === "specific" && !!selectedHeli) ||
     (selectionMode === "generic" && !!planningCategory);
 
-  const fmtLen = (m: number) => isMetric ? m.toFixed(2) : toFeet(m).toFixed(2);
+  const fmtLen = (m: number) => (isMetric ? formatDimM(m) : formatDimM(toFeet(m)));
   const fmtMass = (kg: number) =>
     isMetric ? kg.toFixed(2) : toLbs(kg).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -305,14 +305,14 @@ const HeliportPage = () => {
     setWindLoading(true);
     setWindError(null);
     try {
-      const data = await parseWindData(file);
+      const data = await parseWindData(file, effectiveCalmThreshold);
       setParsedData(data);
     } catch (err: any) {
       setWindError(err.message ?? "Failed to parse file");
     } finally {
       setWindLoading(false);
     }
-  }, []);
+  }, [effectiveCalmThreshold]);
 
   const handleLoadSample = useCallback(async (i: number) => {
     const preset = SAMPLE_PRESETS[i];
@@ -901,14 +901,14 @@ const HeliportPage = () => {
                       <div className="mt-4 pt-3 border-t border-border space-y-3">
                         <AeroInput
                           label="D-Value Override"
-                          placeholder={helicopter?.dValue_m ? helicopter.dValue_m.toFixed(1) : "—"}
+                          placeholder={helicopter?.dValue_m != null ? formatDimM(helicopter.dValue_m) : "—"}
                           unit={lenUnit.toUpperCase()}
                           value={dValue}
                           onChange={setDValue}
                         />
                         <AeroInput
                           label="Rotor Diameter Override"
-                          placeholder={helicopter?.rotorDiameter_m ? helicopter.rotorDiameter_m.toFixed(1) : "—"}
+                          placeholder={helicopter?.rotorDiameter_m != null ? formatDimM(helicopter.rotorDiameter_m) : "—"}
                           unit={lenUnit.toUpperCase()}
                           value={rotorDia}
                           onChange={setRotorDia}

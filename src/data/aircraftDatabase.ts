@@ -47,6 +47,11 @@ export const MS_TO_KTS = 1.94384;
 
 export function toFeet(m: number): number { return m * M_TO_FT; }
 export function toMetres(ft: number): number { return ft * FT_TO_M; }
+
+/** Length/rotor-style display: at most 2 dp, no trailing zero pad (13.8 not "13.80"; 17.31 unchanged). */
+export function formatDimM(m: number): string {
+  return String(Number(m.toFixed(2)));
+}
 export function toLbs(kg: number): number { return kg * KG_TO_LBS; }
 export function toKg(lbs: number): number { return lbs * LBS_TO_KG; }
 export function toMs(kts: number): number { return kts * KTS_TO_MS; }
@@ -98,8 +103,8 @@ export const aircraftDatabase: AircraftData[] = [
 ];
 
 // ── Helicopter Database ───────────────────────────────
-// Source: User reference table (MTOW, Length, Rotor, Tire Press, Gear Type)
-// D-value estimated as: max(fuselage_length, rotorDiameter) + tail rotor offset
+// Source: Reference sheet — MTOW (kg), length (m), main rotor Ø (m). D-value (m) is overall planning dimension (verify per AFM / survey).
+// Length & rotor Ø match the sheet (store natural literals; use formatDimM() for display).
 // Each entry includes planningCrosswindLimit_kt for heliport wind-usability planning
 // (light 10 / medium 15 / heavy 17 by default; AFM-specific overrides e.g. AW138/AW139 = 10).
 export const helicopterDatabase: HelicopterData[] = [
@@ -135,7 +140,7 @@ export const helicopterDatabase: HelicopterData[] = [
   { icao: "H225", manufacturer: "Airbus", model: "H225 (EC225)",            rotorDiameter_m: 16.2,  dValue_m: 19.50, length_m: 19.50, mtow_kg: 11200, approachSpeed_kts: 85, category: "heavy",  planningCrosswindLimit_kt: 17, typicalUse: "Offshore / SAR / Military",         heliportRelevance: "Offshore",              notes: "Heavy twin long-range | Gear: Tricycle | Tire: 900 kPa" },
 
   // ── Bell ──────────────────────────────────────────────────────────────────
-  { icao: "B505", manufacturer: "Bell", model: "505 Jet Ranger X",          rotorDiameter_m: 10.59, dValue_m: 11.03, length_m: 11.03, mtow_kg: 1932,  approachSpeed_kts: 62, category: "light",  planningCrosswindLimit_kt: 10, typicalUse: "Training / Private / Utility",      heliportRelevance: "General aviation",      notes: "Light single | Gear: Skid | Tire: 550 kPa" },
+  { icao: "B505", manufacturer: "Bell", model: "Bell 505 Jet Ranger X",   rotorDiameter_m: 10.59, dValue_m: 11.03, length_m: 11.03, mtow_kg: 1932,  approachSpeed_kts: 62, category: "light",  planningCrosswindLimit_kt: 10, typicalUse: "Training / Private / Utility",      heliportRelevance: "General aviation",      notes: "Light single | Gear: Skid | Tire: 550 kPa" },
   { icao: "B407", manufacturer: "Bell", model: "Bell 407",                  rotorDiameter_m: 10.67, dValue_m: 12.70, length_m: 12.70, mtow_kg: 2268,  approachSpeed_kts: 70, category: "light",  planningCrosswindLimit_kt: 10, typicalUse: "EMS / Utility / Law Enforcement",   heliportRelevance: "Hospital / General",    notes: "Single-engine | Gear: Skid | Tire: 600 kPa" },
   { icao: "B40G", manufacturer: "Bell", model: "Bell 407GXi",               rotorDiameter_m: 10.67, dValue_m: 12.70, length_m: 12.70, mtow_kg: 2381,  approachSpeed_kts: 70, category: "light",  planningCrosswindLimit_kt: 10, typicalUse: "EMS / Utility / Law Enforcement",   heliportRelevance: "Hospital / General",    notes: "Updated single | Gear: Skid | Tire: 620 kPa" },
   { icao: "B412", manufacturer: "Bell", model: "Bell 412EP/EPi",            rotorDiameter_m: 14.02, dValue_m: 17.10, length_m: 17.10, mtow_kg: 5397,  approachSpeed_kts: 80, category: "medium", planningCrosswindLimit_kt: 15, typicalUse: "Transport / SAR / Offshore",         heliportRelevance: "Offshore / General",    notes: "Medium twin | Gear: Skid | Tire: 700 kPa" },
@@ -176,7 +181,7 @@ export const helicopterDatabase: HelicopterData[] = [
   { icao: "KA62", manufacturer: "Kamov", model: "Kamov Ka-62",              rotorDiameter_m: 13.8,  dValue_m: 15.54, length_m: 15.54, mtow_kg: 6500,  approachSpeed_kts: 78, category: "medium", planningCrosswindLimit_kt: 15, typicalUse: "Offshore / VIP / EMS",              heliportRelevance: "Offshore / General",    notes: "Medium twin | Gear: Tricycle | Tire: 720 kPa" },
 
   // ── Mil ───────────────────────────────────────────────────────────────────
-  { icao: "MI8",  manufacturer: "Mil", model: "Mi-8 / Mi-17",               rotorDiameter_m: 21.29, dValue_m: 25.24, length_m: 25.24, mtow_kg: 13000, approachSpeed_kts: 80, category: "heavy",  planningCrosswindLimit_kt: 17, typicalUse: "Transport / SAR / Military",         heliportRelevance: "Military / General",   notes: "Heavy twin | Gear: Tricycle | Tire: 900 kPa" },
+  { icao: "MI8",  manufacturer: "Mil", model: "Mi-8/Mi-17",                 rotorDiameter_m: 21.29, dValue_m: 25.24, length_m: 25.24, mtow_kg: 13000, approachSpeed_kts: 80, category: "heavy",  planningCrosswindLimit_kt: 17, typicalUse: "Transport / SAR / Military",         heliportRelevance: "Military / General",   notes: "Heavy twin | Gear: Tricycle | Tire: 900 kPa" },
   { icao: "MI17", manufacturer: "Mil", model: "Mi-171A2",                   rotorDiameter_m: 21.29, dValue_m: 25.24, length_m: 25.24, mtow_kg: 13500, approachSpeed_kts: 80, category: "heavy",  planningCrosswindLimit_kt: 17, typicalUse: "Transport / Military",              heliportRelevance: "Military / General",   notes: "Upgraded Mi-8 | Gear: Tricycle | Tire: 920 kPa" },
   { icao: "MI38", manufacturer: "Mil", model: "Mi-38",                      rotorDiameter_m: 21.1,  dValue_m: 25.10, length_m: 25.10, mtow_kg: 15600, approachSpeed_kts: 82, category: "heavy",  planningCrosswindLimit_kt: 17, typicalUse: "Transport / Offshore",              heliportRelevance: "Offshore / Military",  notes: "Heavy twin modern | Gear: Tricycle | Tire: 950 kPa" },
 

@@ -14,6 +14,7 @@ import {
 import { saveAs } from "file-saver";
 
 import type { AirportReportData, HeliportReportData, WaterReportData } from "@/contexts/AnalysisContext";
+import { formatDimM } from "@/data/aircraftDatabase";
 import { renderExecutiveWindRose } from "@/lib/windRoseRenderer";
 import { runwayCrosswindReportLabel, effectiveRunwayCrosswindKt } from "@/lib/runwayReportCrosswind";
 import {
@@ -503,8 +504,8 @@ export async function exportEditableReportDocx(args: {
         ["Performance Class", v(d.perfClass)],
         ["Reference Helicopter", d.helipad?.helicopter?.model ? `${d.helipad.helicopter.manufacturer} ${d.helipad.helicopter.model}` : (d.planningCategory || "—")],
         ["MTOW", v(d.mtow || d.helipad?.helicopter?.mtow_kg?.toLocaleString(), " kg")],
-        ["D-Value", v(d.dValue || d.helipad?.dVal?.toFixed(1), " m")],
-        ["Rotor Diameter", v(d.rotorDia || d.helipad?.rotor?.toFixed(1), " m")],
+        ["D-Value", v(d.dValue || (d.helipad?.dVal != null ? formatDimM(d.helipad.dVal) : ""), " m")],
+        ["Rotor Diameter", v(d.rotorDia || (d.helipad?.rotor != null ? formatDimM(d.helipad.rotor) : ""), " m")],
         ["Valid Observations", v(d.windData?.validRows?.toLocaleString())],
         ["Data Reliability", d.windData?.reliability ? d.windData.reliability.toUpperCase() : "—"],
       ])
@@ -527,8 +528,8 @@ export async function exportEditableReportDocx(args: {
     const dValNum = parseFloat(d.dValue || "") || d.helipad?.dVal || 0;
     children.push(
       kvTable([
-        ["FATO Dimensions", dValNum ? `${dValNum.toFixed(1)} m × ${dValNum.toFixed(1)} m` : "—"],
-        ["Safety Area Clearance", dValNum ? `${(dValNum * 1.5).toFixed(1)} m from edge` : "—"],
+        ["FATO Dimensions", dValNum ? `${formatDimM(dValNum)} m × ${formatDimM(dValNum)} m` : "—"],
+        ["Safety Area Clearance", dValNum ? `${formatDimM(dValNum * 1.5)} m from edge` : "—"],
       ])
     );
 

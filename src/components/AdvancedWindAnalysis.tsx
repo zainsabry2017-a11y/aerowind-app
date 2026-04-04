@@ -46,11 +46,11 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
       mode === "heliport" && calmThresholdKts !== undefined && Number.isFinite(calmThresholdKts);
     const bins = [
       { label: "0-5 kt", min: 0, max: 5, count: 0 },
-      { label: "6-10 kt", min: 5.01, max: 10, count: 0 },
-      { label: "11-15 kt", min: 10.01, max: 15, count: 0 },
-      { label: "16-20 kt", min: 15.01, max: 20, count: 0 },
-      { label: "21-25 kt", min: 20.01, max: 25, count: 0 },
-      { label: "25+ kt", min: 25.01, max: Infinity, count: 0 }
+      { label: "6-10 kt", min: 5, max: 10, count: 0 },
+      { label: "11-15 kt", min: 10, max: 15, count: 0 },
+      { label: "16-20 kt", min: 15, max: 20, count: 0 },
+      { label: "21-25 kt", min: 20, max: 25, count: 0 },
+      { label: "25+ kt", min: 25, max: Infinity, count: 0 }
     ];
 
     records.forEach(r => {
@@ -71,12 +71,12 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
 
       if (cw <= cwLimit) within++;
 
-      const targetBin = bins.find(b => cw >= b.min && cw <= b.max);
-      if (targetBin) {
-        targetBin.count++;
-      } else if (cw > 25) {
-        bins[5].count++;
-      }
+      const idx = bins.findIndex((b, i) => {
+        const lowerOk = cw >= b.min;
+        const upperOk = i === bins.length - 1 ? cw <= b.max : cw < b.max;
+        return lowerOk && upperOk;
+      });
+      if (idx >= 0) bins[idx].count++;
     });
 
     return {
