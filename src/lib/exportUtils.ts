@@ -246,18 +246,48 @@ export function printHTML(html: string) {
   }, 300);
 }
 
+async function waitForHostImages(root: HTMLElement) {
+  const imgs = Array.from(root.querySelectorAll("img"));
+  await Promise.all(
+    imgs.map(
+      (img) =>
+        new Promise<void>((resolve) => {
+          if (img.complete && img.naturalWidth > 0) {
+            resolve();
+            return;
+          }
+          const done = () => resolve();
+          img.addEventListener("load", done, { once: true });
+          img.addEventListener("error", done, { once: true });
+        })
+    )
+  );
+  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+}
+
 export async function exportHTMLAsPDF(html: string, filename: string) {
   const host = document.createElement("div");
   host.style.position = "fixed";
-  host.style.left = "-100000px";
+  host.style.left = "-10000px";
   host.style.top = "0";
+  host.style.width = "210mm";
   host.style.background = "#ffffff";
   document.body.appendChild(host);
 
   try {
-    host.innerHTML = html;
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, "text/html");
+    doc.head.querySelectorAll("style").forEach((s) => {
+      host.appendChild(s.cloneNode(true));
+    });
+    while (doc.body.firstChild) {
+      host.appendChild(doc.body.firstChild);
+    }
+
+    await waitForHostImages(host);
+
     const pages = Array.from(host.querySelectorAll<HTMLElement>(".page"));
-    const targets = pages.length ? pages : [host as unknown as HTMLElement];
+    const targets = pages.length ? pages : [host];
 
     const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
     const pageWidth = pdf.internal.pageSize.getWidth();
@@ -270,9 +300,11 @@ export async function exportHTMLAsPDF(html: string, filename: string) {
     for (const t of targets) {
       const canvas = await html2canvas(t, {
         backgroundColor: "#ffffff",
-        scale: 3,
+        scale: 2,
         useCORS: true,
         logging: false,
+        windowWidth: t.scrollWidth,
+        windowHeight: t.scrollHeight,
       });
       const img = canvas.toDataURL("image/png", 1.0);
       if (!first) pdf.addPage();

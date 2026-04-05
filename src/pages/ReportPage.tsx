@@ -9,11 +9,13 @@ import { useAnalysis, type AirportReportData, type HeliportReportData, type Wate
 import { Printer, FileText, CheckSquare, Square, Settings2, BarChart4, BookOpen, Wind, Database, Download } from "lucide-react";
 import { AdvancedWindAnalysis } from "@/components/AdvancedWindAnalysis";
 import { OrientationOptimizer } from "@/components/OrientationOptimizer";
-import { renderExecutiveWindRose, renderEngineeringWindRose } from "@/lib/windRoseRenderer";
+import { renderConsultantGridWindRose, renderExecutiveWindRose, renderEngineeringWindRose } from "@/lib/windRoseRenderer";
 import { useLocation } from "react-router-dom";
 import { DEFAULT_WIND_ROSE_OPTIONS } from "@/lib/windRoseCalculator";
 import { effectiveRunwayCrosswindKt, runwayCrosswindReportLabel } from "@/lib/runwayReportCrosswind";
+import { heliportPerfClassDefaultXw } from "@/lib/reportWindAnalysisTables";
 import { formatDimM } from "@/data/aircraftDatabase";
+import { toast } from "sonner";
 
 
 // ── Helpers ──
@@ -352,7 +354,14 @@ const ReportPage = () => {
   }, [location.search, hasData.airport, hasData.heliport, hasData.water]);
 
   // ── Wind chart generator: builds wind rose + bar charts from data directly ──
-  const buildWindChartsHTML = (windRose: any, orientation: number | null, cwLimit: number, label: string): string => {
+  const buildWindChartsHTML = (
+    windRose: any,
+    orientation: number | null,
+    cwLimit: number,
+    label: string,
+    consultantRose: any = null,
+    consultantRefKt = 25
+  ): string => {
     if (!windRose) return `<p style="font-style:italic;color:#888;font-size:9pt;">No wind data available for ${label}.</p>`;
 
     // Helper: encode SVG string as base64 data-URI
@@ -364,6 +373,18 @@ const ReportPage = () => {
     // 1. Wind Rose SVG (call the renderer with supported options only)
     const windRoseSvg = renderExecutiveWindRose(windRose, { size: 540 });
     const windRoseUri = svgToDataUri(windRoseSvg);
+
+    const consultantSvg = consultantRose
+      ? renderConsultantGridWindRose(consultantRose, {
+          size: 540,
+          title: "Direction × speed grid & corridor",
+          runwayHeadingDeg: orientation,
+          crosswindLimitKt:
+            orientation != null && Number.isFinite(orientation) && cwLimit > 0 ? cwLimit : undefined,
+          refSpeedKt: consultantRefKt,
+        })
+      : "";
+    const consultantUri = consultantSvg ? svgToDataUri(consultantSvg) : "";
 
     // 2. Speed Distribution bar chart SVG
     const speedRows = windRose.speedBinRanges?.map((range: any, i: number) => {
@@ -447,6 +468,12 @@ const ReportPage = () => {
           <img src="${windRoseUri}" style="width:400pt;height:400pt;max-width:100%;border:1pt solid #d1d5db;display:inline-block;" alt="Wind Rose Chart — ${label}"/>
         </div>` : ""}
 
+        ${consultantUri ? `<h3 style="font-size:11pt;font-family:Calibri;margin:10pt 0 4pt;font-weight:600;color:#0e7490;">Consultant wind grid (direction × speed %)</h3>
+        <p style="font-size:9pt;color:#64748b;margin:0 0 6pt;">Speed rings 0–4, 4–6, 6–10 kt, …; hatched corridor width from crosswind limit and ref speed.</p>
+        <div style="text-align:center;margin:8pt 0;page-break-inside:avoid;">
+          <img src="${consultantUri}" style="max-width:100%;height:auto;border:1pt solid #d1d5db;display:inline-block;" alt="Consultant wind grid — ${label}"/>
+        </div>` : ""}
+
         <h3 style="font-size:11pt;font-family:Calibri;margin:8pt 0 4pt;font-weight:600;">Wind Frequency by Direction Sector</h3>
         ${dirTable}
 
@@ -463,18 +490,24 @@ const ReportPage = () => {
   };
 
   const handleWordExport = async () => {
-    await exportEditableReportDocx({
-      reportType,
-      todayLabel: today,
-      activeTitle,
-      primaryProjName,
-      primaryLoc,
-      opts,
-      airportReportData: airportReportData ?? null,
-      heliportReportData: heliportReportData ?? null,
-      waterReportData: waterReportData ?? null,
-      filename: `AeroWind_${reportType}_Report_${today.replace(/ /g, "_")}.docx`,
-    });
+    try {
+      await exportEditableReportDocx({
+        reportType,
+        todayLabel: today,
+        activeTitle,
+        primaryProjName,
+        primaryLoc,
+        opts,
+        airportReportData: airportReportData ?? null,
+        heliportReportData: heliportReportData ?? null,
+        waterReportData: waterReportData ?? null,
+        filename: `AeroWind_${reportType}_Report_${today.replace(/ /g, "_")}.docx`,
+      });
+      toast.success("Word report downloaded");
+    } catch (e) {
+      console.error(e);
+      toast.error(e instanceof Error ? e.message : "Word export failed. Try PDF or check the browser console.");
+    }
     return;
     // ── 2. Helper functions for clean Word HTML ──────────────────────────────
     const th = (label: string) => `<th style="background:#f0f4f8;font-size:7.5pt;text-transform:uppercase;font-family:Courier New,monospace;letter-spacing:0.06em;padding:5pt 8pt;border:0.75pt solid #c8d0d9;font-weight:600;color:#374151;">${label}</th>`;
@@ -588,7 +621,14 @@ const ReportPage = () => {
         body += note("amber", "No runway length analysis performed.");
       }
       body += sec("5", "Wind Analysis Charts");
-      body += buildWindChartsHTML(d.windRose || null, d.optimization?.bestHeading ?? null, effectiveRunwayCrosswindKt(d.xwLimit, 20), "Airport");
+      body += buildWindChartsHTML(
+        d.windRose || null,
+        d.optimization?.bestHeading ?? null,
+        effectiveRunwayCrosswindKt(d.xwLimit, 20),
+        "Airport",
+        d.windRoseConsultant ?? null,
+        d.consultantRefSpeedKt ?? 25
+      );
       if (d.notes) { body += sec("6", "Notes"); body += `<p style="font-size:10pt;line-height:1.6;">${d.notes}</p>`; }
     }
 
@@ -635,7 +675,15 @@ const ReportPage = () => {
       ]);
       if (opts.includeWarnings) body += note("amber", "Warning: Heliport OLS surveys must confirm a 1:5 or 1:10 approach flight path based on classification. Wind-derived orientation does not account for physical landscape obstacles.");
       body += sec("5", "Wind Analysis Charts");
-      body += buildWindChartsHTML(d.windRose || null, d.fatoResult?.optimalHeading ?? null, d.perfClass === "1" ? 17 : d.perfClass === "2" ? 15 : d.perfClass === "3" ? 10 : 15, "Heliport");
+      const heliCwPdf = d.effectiveHelipadXw ?? heliportPerfClassDefaultXw(String(d.perfClass ?? "2"));
+      body += buildWindChartsHTML(
+        d.windRose || null,
+        d.fatoResult?.optimalHeading ?? null,
+        heliCwPdf,
+        "Heliport",
+        d.windRoseConsultant ?? null,
+        d.consultantRefSpeedKt ?? 25
+      );
     }
 
     // ── Water Runway section ──
@@ -677,7 +725,14 @@ const ReportPage = () => {
       ]);
       if (opts.includeWarnings) body += note("blue", "Advisory: Wave-drag coefficients drastically increase takeoff distance. Standard field-length models do not safely apply on water operations without seaplane performance manual corrections.");
       body += sec("5", "Wind Analysis Charts");
-      body += buildWindChartsHTML(d.windRose || null, d.rwHeading ? parseFloat(d.rwHeading) : null, effectiveRunwayCrosswindKt(d.xwLimit, 12), "Water Aerodrome");
+      body += buildWindChartsHTML(
+        d.windRose || null,
+        d.rwHeading ? parseFloat(d.rwHeading) : null,
+        effectiveRunwayCrosswindKt(d.xwLimit, 12),
+        "Water Aerodrome",
+        d.windRoseConsultant ?? null,
+        d.consultantRefSpeedKt ?? 25
+      );
     }
 
     // ── Appendices ──
@@ -736,32 +791,44 @@ const ReportPage = () => {
   };
 
   const handlePDFExport = async () => {
-    const html = buildProfessionalReportHTML({
-      reportType,
-      todayLabel: today,
-      activeTitle,
-      primaryProjName,
-      primaryLoc,
-      opts,
-      airportReportData: airportReportData ?? null,
-      heliportReportData: heliportReportData ?? null,
-      waterReportData: waterReportData ?? null,
-    });
-    await exportHTMLAsPDF(html, `AeroWind_${reportType}_Report_${today.replace(/ /g, "_")}.pdf`);
+    try {
+      const html = buildProfessionalReportHTML(
+        {
+          reportType,
+          todayLabel: today,
+          activeTitle,
+          primaryProjName,
+          primaryLoc,
+          opts,
+          airportReportData: airportReportData ?? null,
+          heliportReportData: heliportReportData ?? null,
+          waterReportData: waterReportData ?? null,
+        },
+        { splitWindPagesForRaster: true }
+      );
+      await exportHTMLAsPDF(html, `AeroWind_${reportType}_Report_${today.replace(/ /g, "_")}.pdf`);
+      toast.success("PDF downloaded");
+    } catch (e) {
+      console.error(e);
+      toast.error(e instanceof Error ? e.message : "PDF export failed. Try Print and Save as PDF.");
+    }
   };
 
   const handlePrint = () => {
-    const html = buildProfessionalReportHTML({
-      reportType,
-      todayLabel: today,
-      activeTitle,
-      primaryProjName,
-      primaryLoc,
-      opts,
-      airportReportData: airportReportData ?? null,
-      heliportReportData: heliportReportData ?? null,
-      waterReportData: waterReportData ?? null,
-    });
+    const html = buildProfessionalReportHTML(
+      {
+        reportType,
+        todayLabel: today,
+        activeTitle,
+        primaryProjName,
+        primaryLoc,
+        opts,
+        airportReportData: airportReportData ?? null,
+        heliportReportData: heliportReportData ?? null,
+        waterReportData: waterReportData ?? null,
+      },
+      { splitWindPagesForRaster: true }
+    );
     printHTML(html);
   };
 

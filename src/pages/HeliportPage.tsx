@@ -9,9 +9,8 @@
  *    NOT bleed into this context. FATO is omnidirectional/reciprocal.
  * 3. CALM WIND PRESERVATION: The parser must map 0-kts / null-direction 
  *    to a safe valid record (0°). Calm winds are 100% usable FATO hours.
- * 4. REPORT COUPLING: The final 'Heliport Report' tab must always mount 
- *    from active local React states (`parsedData`, `fatoResult`), NOT stale 
- *    context caches, to ensure 1:1 parity with user views.
+ * 4. REPORT COUPLING: Reports use merged `fatoResult` — Tab 4 Helipad Usability
+ *    selection when set, else global optimizer — plus `parsedData`, not stale context.
  * 5. GEOMETRY: Max(D-Value, Rotor) = TLOF. 1.5D = FATO. Safety Area = 0.25D.
  * ============================================================================
  */
@@ -34,9 +33,9 @@ import { AeroSelect, AeroInput } from "@/components/AeroInput";
 import { helicopterDatabase, planningCrosswindLimitForHelicopter, formatDimM, toFeet, toLbs, type HelicopterData } from "@/data/aircraftDatabase";
 import { DISCLAIMER, HELIPORT_DISCLAIMER, DATA_LABELS } from "@/lib/engineeringSafety";
 import { parseWindData, type ParsedWindData, type WindRecord } from "@/lib/windDataParser";
-import { calculateWindRose, DEFAULT_WIND_ROSE_OPTIONS, windVectorMeanDirectionDeg, type WindRoseResult } from "@/lib/windRoseCalculator";
+import { calculateWindRose, CONSULTANT_GRID_SPEED_EDGES, DEFAULT_WIND_ROSE_OPTIONS, windVectorMeanDirectionDeg, type WindRoseResult } from "@/lib/windRoseCalculator";
 import { inboundHeadingForHeadwind, optimizeRunwayOrientation } from "@/lib/windComponents";
-import { renderExecutiveWindRose, renderEngineeringWindRose } from "@/lib/windRoseRenderer";
+import { renderConsultantGridWindRose, renderEngineeringWindRose, renderExecutiveWindRose } from "@/lib/windRoseRenderer";
 import { loadSampleDataAsFile, downloadSampleCSV, SAMPLE_PRESETS } from "@/lib/sampleDataGenerator";
 import { exportCSV } from "@/lib/exportUtils";
 import { useAnalysis } from "@/contexts/AnalysisContext";
@@ -110,6 +109,8 @@ const HeliportPage = () => {
   const [useGust, setUseGust] = useState(false);
   const [helipadUseCustomXw, setHelipadUseCustomXw] = useState(heliportReportData?.helipadUseCustomXw ?? false);
   const [helipadCustomXw, setHelipadCustomXw] = useState(heliportReportData?.helipadCustomXw ?? "");
+  /** Live FATO from Tab 4 Helipad Usability (candidates or “show optimal”); chart & reports use this when set. */
+  const [helipadUsabilityLive, setHelipadUsabilityLive] = useState<HelipadUsabilityResult | null>(null);
 
   const effectiveCalmThreshold = useMemo(() => {
     const t = parseFloat(calmThreshold);
@@ -194,6 +195,29 @@ const HeliportPage = () => {
     });
   }, [parsedData, sectorType, effectiveCalmThreshold, useGust, monthFilter]);
 
+  const windRoseConsultant = useMemo<WindRoseResult | null>(() => {
+    if (!parsedData) return null;
+    return calculateWindRose(parsedData.records, {
+      sectorSize: parseFloat(sectorType),
+      speedBins: CONSULTANT_GRID_SPEED_EDGES,
+      calmThreshold: effectiveCalmThreshold,
+      useGust,
+      monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
+      seasonFilter: null,
+    });
+  }, [parsedData, sectorType, effectiveCalmThreshold, useGust, monthFilter]);
+
+  const consultantRefSpeedKt = useMemo(() => {
+    if (!parsedData) return 25;
+    let m = 12;
+    for (const r of parsedData.records) {
+      if (!r.isValid) continue;
+      const v = useGust && r.wind_gust_kt != null ? r.wind_gust_kt : r.wind_speed_kt;
+      if (v > m) m = v;
+    }
+    return Math.min(45, Math.max(15, m));
+  }, [parsedData, useGust]);
+
   const svgString = useMemo(() => {
     if (!windRose) return "";
     const opts = {
@@ -214,7 +238,7 @@ const HeliportPage = () => {
   const windFromVectorMean = useMemo(() => (windRose ? windVectorMeanDirectionDeg(windRose) : null), [windRose]);
 
   // ── Unconditional Computations for Reports Center ──
-  const fatoResult = useMemo<HelipadUsabilityResult | null>(() => {
+  const optimizerFatoResult = useMemo<HelipadUsabilityResult | null>(() => {
     if (!records.length || effectiveHelipadXw === null) return null;
     const opt = optimizeRunwayOrientation(records, effectiveHelipadXw, effectiveCalmThreshold, useGust);
     const recommendedApproach =
@@ -228,6 +252,41 @@ const HeliportPage = () => {
       prevailingWind: windFromVectorMean ?? prevailingWind?.center ?? null
     };
   }, [records, effectiveHelipadXw, prevailingWind, windFromVectorMean, effectiveCalmThreshold, useGust]);
+
+  const fatoResult = useMemo<HelipadUsabilityResult | null>(() => {
+    if (helipadUsabilityLive?.optimalHeading != null) {
+      return {
+        optimalHeading: helipadUsabilityLive.optimalHeading,
+        usabilityPercent: helipadUsabilityLive.usabilityPercent,
+        recommendedApproach: helipadUsabilityLive.recommendedApproach,
+        prevailingWind:
+          helipadUsabilityLive.prevailingWind ??
+          optimizerFatoResult?.prevailingWind ??
+          windFromVectorMean ??
+          prevailingWind?.center ??
+          null,
+      };
+    }
+    return optimizerFatoResult;
+  }, [helipadUsabilityLive, optimizerFatoResult, windFromVectorMean, prevailingWind?.center]);
+
+  useEffect(() => {
+    if (effectiveHelipadXw == null || records.length === 0) {
+      setHelipadUsabilityLive(null);
+    }
+  }, [effectiveHelipadXw, records.length]);
+
+  const consultantFatoSvg = useMemo(() => {
+    if (!windRoseConsultant || fatoResult?.optimalHeading == null || effectiveHelipadXw == null) return "";
+    return renderConsultantGridWindRose(windRoseConsultant, {
+      size: 600,
+      title: "FATO wind grid & corridor",
+      subtitle: `FATO ${String(fatoResult.optimalHeading).padStart(3, "0")}° / ${String((fatoResult.optimalHeading + 180) % 360).padStart(3, "0")}° · ${fatoResult.usabilityPercent?.toFixed(1) ?? "—"}% @ ${effectiveHelipadXw} kt`,
+      runwayHeadingDeg: fatoResult.optimalHeading,
+      crosswindLimitKt: effectiveHelipadXw,
+      refSpeedKt: consultantRefSpeedKt,
+    });
+  }, [windRoseConsultant, fatoResult, effectiveHelipadXw, consultantRefSpeedKt]);
 
   const approachResult = useMemo<ApproachAnalysisResult | null>(() => {
     if (!windRose) return null;
@@ -270,6 +329,7 @@ const HeliportPage = () => {
       projName: projectName || projectLoc,
       projectLoc, elevation, perfClass, heliType, helipadType, notes,
       windData: parsedData, windRose,
+      windRoseConsultant, consultantRefSpeedKt,
       fatoResult, approachResult,
       selectedHeli, planningCategory, selectionMode, dValue, rotorDia, mtow,
       helipad: { helicopter, dVal, rotor },
@@ -279,7 +339,7 @@ const HeliportPage = () => {
     });
   }, [
     projectName, projectLoc, elevation, perfClass, heliType, helipadType, notes,
-    parsedData, windRose, fatoResult, approachResult,
+    parsedData, windRose, windRoseConsultant, consultantRefSpeedKt, fatoResult, approachResult,
     selectedHeli, planningCategory, selectionMode, dValue, rotorDia, mtow,
     helicopter, dVal, rotor, helipadUseCustomXw, helipadCustomXw, effectiveHelipadXw,
     setHeliportReportData
@@ -710,7 +770,7 @@ const HeliportPage = () => {
                       globalMtow={helicopter?.mtow_kg}
                       calmThresholdKts={effectiveCalmThreshold}
                       useGust={useGust}
-                      onResult={() => {}} 
+                      onResult={setHelipadUsabilityLive}
                     />
                     )}
                   </>
@@ -790,6 +850,14 @@ const HeliportPage = () => {
                         calmThresholdKts={effectiveCalmThreshold}
                         useGust={useGust}
                       />
+                      {consultantFatoSvg ? (
+                        <ChartContainer title="Direction × speed grid (FATO corridor)" className="min-h-[420px]">
+                          <div className="w-full flex justify-center overflow-x-auto" dangerouslySetInnerHTML={{ __html: consultantFatoSvg }} />
+                          <p className="text-[10px] text-muted-foreground text-center mt-2 max-w-xl mx-auto leading-snug">
+                            Corridor follows the FATO axis selected in <strong>Tab 4 — FATO Orientation</strong> (manual candidates or optimization there). If none is selected yet, the global wind optimum is shown. Hatched width scales with crosswind limit and reference wind speed.
+                          </p>
+                        </ChartContainer>
+                      ) : null}
                       <AdvancedWindAnalysis 
                         windRose={windRose || null} 
                         records={parsedData?.records || []} 

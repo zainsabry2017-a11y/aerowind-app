@@ -14,6 +14,8 @@ export interface AirportReportData {
   notes: string;
   windData: ParsedWindData | null;
   windRose: WindRoseResult | null;
+  windRoseConsultant?: WindRoseResult | null;
+  consultantRefSpeedKt?: number;
   candidates: RunwayUsabilityResult[];
   optimization: OptimizationResult | null;
   /** Effective crosswind limit (kt) used in optimization */
@@ -38,6 +40,8 @@ export interface HeliportReportData {
   notes: string;
   windData: ParsedWindData | null;
   windRose: WindRoseResult | null;
+  windRoseConsultant?: WindRoseResult | null;
+  consultantRefSpeedKt?: number;
   fatoResult: any | null; // HelipadUsabilityResult
   approachResult: any | null; // ApproachAnalysisResult
   selectedHeli: string;
@@ -61,6 +65,8 @@ export interface WaterReportData {
   notes: string;
   windData: ParsedWindData | null;
   windRose: WindRoseResult | null;
+  windRoseConsultant?: WindRoseResult | null;
+  consultantRefSpeedKt?: number;
   candidates: RunwayUsabilityResult[];
   optimization: OptimizationResult | null;
   xwLimit: number;

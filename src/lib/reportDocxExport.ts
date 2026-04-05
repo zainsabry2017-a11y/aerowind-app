@@ -15,7 +15,8 @@ import { saveAs } from "file-saver";
 
 import type { AirportReportData, HeliportReportData, WaterReportData } from "@/contexts/AnalysisContext";
 import { formatDimM } from "@/data/aircraftDatabase";
-import { renderExecutiveWindRose } from "@/lib/windRoseRenderer";
+import type { WindRoseResult } from "@/lib/windRoseCalculator";
+import { renderConsultantGridWindRose, renderExecutiveWindRose } from "@/lib/windRoseRenderer";
 import { runwayCrosswindReportLabel, effectiveRunwayCrosswindKt } from "@/lib/runwayReportCrosswind";
 import {
   computeSpeedDistributionRows,
@@ -123,10 +124,14 @@ async function svgToPngDataUri(svg: string, widthPx: number): Promise<string> {
     img.onerror = () => reject(new Error("Failed to render SVG image"));
   });
 
-  const scale = widthPx / Math.max(1, img.width);
+  const w0 = img.naturalWidth || img.width;
+  const h0 = img.naturalHeight || img.height;
+  if (!w0 || !h0) throw new Error("SVG rendered with zero size");
+
+  const scale = widthPx / w0;
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(img.width * scale);
-  canvas.height = Math.round(img.height * scale);
+  canvas.width = Math.round(w0 * scale);
+  canvas.height = Math.round(h0 * scale);
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas context not available");
   ctx.fillStyle = "#ffffff";
@@ -253,6 +258,8 @@ export type DocxWindAnalysisContext = {
   mode: "airport" | "heliport" | "water";
   calmThresholdKts?: number;
   useGust?: boolean;
+  consultantWindRose?: WindRoseResult | null;
+  consultantRefSpeedKt?: number;
 };
 
 async function windFiguresBlocks(label: string, windRose: any, analysisCtx?: DocxWindAnalysisContext | null) {
@@ -300,6 +307,47 @@ async function windFiguresBlocks(label: string, windRose: any, analysisCtx?: Doc
       ],
     })
   );
+
+  const cons = analysisCtx?.consultantWindRose;
+  if (cons && analysisCtx) {
+    try {
+      const refV = analysisCtx.consultantRefSpeedKt ?? 25;
+      const ori = analysisCtx.orientation;
+      const cwLim = analysisCtx.cwLimit;
+      const consultantSvg = renderConsultantGridWindRose(cons, {
+        size: 560,
+        title: "Direction x speed grid and corridor",
+        runwayHeadingDeg: ori,
+        crosswindLimitKt:
+          ori != null && Number.isFinite(ori) && cwLim != null && Number.isFinite(cwLim) && cwLim > 0 ? cwLim : undefined,
+        refSpeedKt: refV,
+      });
+      const consultantPng = await svgToPngDataUri(consultantSvg, 1000);
+      blocks.push(heading("Consultant wind grid (direction x speed)", HeadingLevel.HEADING_3, 120, 80));
+      blocks.push(
+        p("Percentages per sector and speed ring; hatched wedges show low-crosswind corridor (width from crosswind limit and ref speed).", {
+          italic: true,
+        })
+      );
+      blocks.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: [
+            new ImageRun({
+              data: dataUriToUint8Array(consultantPng),
+              transformation: { width: 500, height: 535 },
+            }),
+          ],
+        })
+      );
+    } catch {
+      blocks.push(
+        p("Consultant direction x speed grid could not be rasterized for Word (browser limitation); use PDF or on-screen report for the full figure.", {
+          italic: true,
+        })
+      );
+    }
+  }
 
   if (analysisCtx && analysisCtx.records.length > 0) {
     const cw = computeCrosswindAnalysis(
@@ -472,6 +520,8 @@ export async function exportEditableReportDocx(args: {
           orientation: d.optimization?.bestHeading ?? null,
           cwLimit: effectiveRunwayCrosswindKt(d.xwLimit, 20),
           mode: "airport",
+          consultantWindRose: d.windRoseConsultant ?? null,
+          consultantRefSpeedKt: d.consultantRefSpeedKt ?? 25,
         }))
       );
     }
@@ -543,6 +593,8 @@ export async function exportEditableReportDocx(args: {
           mode: "heliport",
           calmThresholdKts: DEFAULT_WIND_ROSE_OPTIONS.calmThreshold,
           useGust: false,
+          consultantWindRose: d.windRoseConsultant ?? null,
+          consultantRefSpeedKt: d.consultantRefSpeedKt ?? 25,
         }))
       );
     }
@@ -618,6 +670,8 @@ export async function exportEditableReportDocx(args: {
           orientation: d.rwHeading ? parseFloat(d.rwHeading) : null,
           cwLimit: effectiveRunwayCrosswindKt(d.xwLimit, 12),
           mode: "water",
+          consultantWindRose: d.windRoseConsultant ?? null,
+          consultantRefSpeedKt: d.consultantRefSpeedKt ?? 25,
         }))
       );
     }

@@ -1,5 +1,6 @@
 import type { AirportReportData, HeliportReportData, WaterReportData } from "@/contexts/AnalysisContext";
-import { renderExecutiveWindRose } from "@/lib/windRoseRenderer";
+import type { WindRoseResult } from "@/lib/windRoseCalculator";
+import { renderConsultantGridWindRose, renderExecutiveWindRose } from "@/lib/windRoseRenderer";
 import { runwayCrosswindReportLabel, effectiveRunwayCrosswindKt } from "@/lib/runwayReportCrosswind";
 import {
   computeSpeedDistributionRows,
@@ -118,9 +119,18 @@ export type WindFiguresAnalysisContext = {
   mode: "airport" | "heliport" | "water";
   calmThresholdKts?: number;
   useGust?: boolean;
+  consultantWindRose?: WindRoseResult | null;
+  consultantRefSpeedKt?: number;
 };
 
-function windFiguresHTML(label: string, windRose: any, analysisCtx?: WindFiguresAnalysisContext | null) {
+type WindFiguresLayoutOpts = { splitTablesToNewPage?: boolean };
+
+function windFiguresHTML(
+  label: string,
+  windRose: any,
+  analysisCtx?: WindFiguresAnalysisContext | null,
+  layout?: WindFiguresLayoutOpts
+) {
   if (!windRose) return `<p class="muted">No wind data available for ${esc(label)}.</p>`;
   const windRoseSvg = renderExecutiveWindRose(windRose, { size: 520 });
   const windRoseUri = svgToDataUri(windRoseSvg);
@@ -159,7 +169,23 @@ function windFiguresHTML(label: string, windRose: any, analysisCtx?: WindFigures
   `
       : "";
 
-  return `
+  const cw = analysisCtx?.cwLimit;
+  const ori = analysisCtx?.orientation ?? null;
+  const refV = analysisCtx?.consultantRefSpeedKt ?? 25;
+  const cons = analysisCtx?.consultantWindRose;
+  const consultantSvg =
+    cons && analysisCtx
+      ? renderConsultantGridWindRose(cons, {
+          size: 560,
+          title: "Direction × speed grid & corridor",
+          runwayHeadingDeg: ori,
+          crosswindLimitKt: ori != null && Number.isFinite(ori) && cw != null && Number.isFinite(cw) && cw > 0 ? cw : undefined,
+          refSpeedKt: refV,
+        })
+      : "";
+  const consultantUri = consultantSvg ? svgToDataUri(consultantSvg) : "";
+
+  const chartsBlock = `
     <h3>Wind Analysis — ${esc(label)}</h3>
     <div class="figure-row">
       <div class="figure">
@@ -171,25 +197,43 @@ function windFiguresHTML(label: string, windRose: any, analysisCtx?: WindFigures
         ${speedUri ? `<img class="img" src="${speedUri}" alt="Speed Distribution"/>` : ""}
       </div>
     </div>
+    ${
+      consultantUri
+        ? `<div class="figure" style="margin-top:10pt;">
+        <div class="cap">Consultant grid (direction × speed %, hatched low-crosswind corridor)</div>
+        <img class="img" src="${consultantUri}" alt="Consultant wind grid"/>
+        <p class="muted" style="margin-top:6pt;">Cells show % of observations per sector and speed ring (0–4, 4–6, 6–10 kt, …). Corridor width follows arcsin(crosswind limit ÷ ref speed).</p>
+      </div>`
+        : ""
+    }`;
+
+  const tablesBlock = `
     <h3>Wind Frequency by Direction</h3>
     ${simpleTable(["Direction", "Center (°)", "Frequency (%)", "Observations"], freqRows)}
     <h3>Speed Distribution</h3>
     ${simpleTable(["Speed range", "Count", "Frequency (%)"], speedTableRows)}
     ${crosswindSection}
   `;
+
+  const pageBreak = layout?.splitTablesToNewPage ? `</div><div class="page">` : "";
+  return `${chartsBlock}${pageBreak}${tablesBlock}`;
 }
 
-export function buildProfessionalReportHTML(args: {
-  reportType: ReportType;
-  todayLabel: string;
-  activeTitle: string;
-  primaryProjName: string;
-  primaryLoc: string;
-  opts: { includeAssumptions: boolean; includeWarnings: boolean; includeRegulatory: boolean; includeFigures: boolean };
-  airportReportData: AirportReportData | null;
-  heliportReportData: HeliportReportData | null;
-  waterReportData: WaterReportData | null;
-}) {
+export function buildProfessionalReportHTML(
+  args: {
+    reportType: ReportType;
+    todayLabel: string;
+    activeTitle: string;
+    primaryProjName: string;
+    primaryLoc: string;
+    opts: { includeAssumptions: boolean; includeWarnings: boolean; includeRegulatory: boolean; includeFigures: boolean };
+    airportReportData: AirportReportData | null;
+    heliportReportData: HeliportReportData | null;
+    waterReportData: WaterReportData | null;
+  },
+  layout?: { splitWindPagesForRaster?: boolean }
+) {
+  const splitWind = !!layout?.splitWindPagesForRaster;
   const { reportType, todayLabel, activeTitle, primaryProjName, primaryLoc, opts, airportReportData, heliportReportData, waterReportData } = args;
 
   const includeAirport = (reportType === "combined" || reportType === "airport") && !!airportReportData;
@@ -267,16 +311,25 @@ export function buildProfessionalReportHTML(args: {
     } else {
       body += `<p class="muted">No runway length analysis performed.</p>`;
     }
-    if (opts.includeFigures) {
-      body += windFiguresHTML("Airport", d.windRose, {
-        records: d.windData?.records ?? [],
-        orientation: d.optimization?.bestHeading ?? null,
-        cwLimit: effectiveRunwayCrosswindKt(d.xwLimit, 20),
-        mode: "airport",
-      });
-    }
     if (d.notes) body += `<h2>Notes</h2><p>${esc(d.notes)}</p>`;
     body += `</div>`;
+    if (opts.includeFigures) {
+      body += `<div class="page">`;
+      body += windFiguresHTML(
+        "Airport",
+        d.windRose,
+        {
+          records: d.windData?.records ?? [],
+          orientation: d.optimization?.bestHeading ?? null,
+          cwLimit: effectiveRunwayCrosswindKt(d.xwLimit, 20),
+          mode: "airport",
+          consultantWindRose: d.windRoseConsultant ?? null,
+          consultantRefSpeedKt: d.consultantRefSpeedKt ?? 25,
+        },
+        { splitTablesToNewPage: splitWind }
+      );
+      body += `</div>`;
+    }
   }
 
   if (includeHeliport && heliportReportData) {
@@ -299,18 +352,27 @@ export function buildProfessionalReportHTML(args: {
       ["Usability Achieved", d.fatoResult?.usabilityPercent != null ? `${Number(d.fatoResult.usabilityPercent).toFixed(1)}%` : "—"],
       ["Wind from (vector mean)", d.approachResult?.prevailingDir != null ? `${String(Math.round(d.approachResult.prevailingDir)).padStart(3, "0")}°` : "—"],
     ]);
+    body += `</div>`;
     if (opts.includeFigures) {
       const heliCw = d.effectiveHelipadXw ?? heliportPerfClassDefaultXw(String(d.perfClass ?? "2"));
-      body += windFiguresHTML("Heliport", d.windRose, {
-        records: d.windData?.records ?? [],
-        orientation: d.fatoResult?.optimalHeading ?? null,
-        cwLimit: heliCw,
-        mode: "heliport",
-        calmThresholdKts: DEFAULT_WIND_ROSE_OPTIONS.calmThreshold,
-        useGust: false,
-      });
+      body += `<div class="page">`;
+      body += windFiguresHTML(
+        "Heliport",
+        d.windRose,
+        {
+          records: d.windData?.records ?? [],
+          orientation: d.fatoResult?.optimalHeading ?? null,
+          cwLimit: heliCw,
+          mode: "heliport",
+          calmThresholdKts: DEFAULT_WIND_ROSE_OPTIONS.calmThreshold,
+          useGust: false,
+          consultantWindRose: d.windRoseConsultant ?? null,
+          consultantRefSpeedKt: d.consultantRefSpeedKt ?? 25,
+        },
+        { splitTablesToNewPage: splitWind }
+      );
+      body += `</div>`;
     }
-    body += `</div>`;
   }
 
   if (includeWater && waterReportData) {
@@ -342,15 +404,24 @@ export function buildProfessionalReportHTML(args: {
       ["Crosswind limit (analysis)", runwayCrosswindReportLabel(d.xwLimit, { crosswindIsCustom: d.crosswindIsCustom, crosswindPreset: d.crosswindPreset })],
       ["Calculated Usability", selCandHtml ? `${selCandHtml.usabilityPercent.toFixed(2)}%` : "—"],
     ]);
-    if (opts.includeFigures) {
-      body += windFiguresHTML("Water Aerodrome", d.windRose, {
-        records: d.windData?.records ?? [],
-        orientation: d.rwHeading ? parseFloat(d.rwHeading) : null,
-        cwLimit: effectiveRunwayCrosswindKt(d.xwLimit, 12),
-        mode: "water",
-      });
-    }
     body += `</div>`;
+    if (opts.includeFigures) {
+      body += `<div class="page">`;
+      body += windFiguresHTML(
+        "Water Aerodrome",
+        d.windRose,
+        {
+          records: d.windData?.records ?? [],
+          orientation: d.rwHeading ? parseFloat(d.rwHeading) : null,
+          cwLimit: effectiveRunwayCrosswindKt(d.xwLimit, 12),
+          mode: "water",
+          consultantWindRose: d.windRoseConsultant ?? null,
+          consultantRefSpeedKt: d.consultantRefSpeedKt ?? 25,
+        },
+        { splitTablesToNewPage: splitWind }
+      );
+      body += `</div>`;
+    }
   }
 
   if (opts.includeAssumptions) {
@@ -380,8 +451,8 @@ export function buildProfessionalReportHTML(args: {
       <style>
         @page { size: A4 portrait; margin: 10mm; }
         body { margin: 0; padding: 0; font-family: Arial, sans-serif; color: #0f172a; background: #ffffff; }
-        .page { width: 210mm; min-height: 297mm; padding: 12mm; box-sizing: border-box; page-break-after: always; }
-        .page:last-child { page-break-after: auto; }
+        .page { width: 210mm; min-height: 297mm; padding: 12mm; box-sizing: border-box; page-break-after: always; break-after: page; }
+        .page:last-child { page-break-after: auto; break-after: auto; }
         h1 { font-size: 18pt; margin: 0 0 10pt; }
         h2 { font-size: 12.5pt; margin: 14pt 0 6pt; border-bottom: 1px solid #cbd5e1; padding-bottom: 3pt; }
         h3 { font-size: 11pt; margin: 10pt 0 6pt; }

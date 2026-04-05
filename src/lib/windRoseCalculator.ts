@@ -194,6 +194,9 @@ export const DEFAULT_WIND_ROSE_OPTIONS: WindRoseOptions = {
   seasonFilter: null,
 };
 
+/** Speed ring edges (kt) for consultant grid rose: 0–4, 4–6, 6–10, … plus open upper bin. */
+export const CONSULTANT_GRID_SPEED_EDGES = [0, 4, 6, 10, 14, 18, 25, 35];
+
 /** Frequency-weighted vector mean (deg), meteorological “wind from” direction. */
 export function windVectorMeanDirectionDeg(windRose: WindRoseResult): number | null {
   let sinSum = 0;

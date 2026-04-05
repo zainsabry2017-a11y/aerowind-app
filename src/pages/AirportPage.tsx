@@ -15,8 +15,8 @@ import { AeroSelect, AeroInput } from "@/components/AeroInput";
 import CrosswindCalculator from "@/components/CrosswindCalculator";
 import ApproachAdvisor, { type ApproachAnalysisResult } from "@/components/ApproachAdvisor";
 import { parseWindData, type ParsedWindData, type WindRecord } from "@/lib/windDataParser";
-import { calculateWindRose, DEFAULT_WIND_ROSE_OPTIONS, windVectorMeanDirectionDeg, type WindRoseResult } from "@/lib/windRoseCalculator";
-import { renderExecutiveWindRose, renderEngineeringWindRose, renderRunwayOverlayWindRose } from "@/lib/windRoseRenderer";
+import { calculateWindRose, CONSULTANT_GRID_SPEED_EDGES, DEFAULT_WIND_ROSE_OPTIONS, windVectorMeanDirectionDeg, type WindRoseResult } from "@/lib/windRoseCalculator";
+import { renderConsultantGridWindRose, renderEngineeringWindRose, renderExecutiveWindRose } from "@/lib/windRoseRenderer";
 import { loadSampleDataAsFile, SAMPLE_PRESETS } from "@/lib/sampleDataGenerator";
 import { calculateRunwayUsability, optimizeRunwayOrientation, type RunwayUsabilityResult, type OptimizationResult } from "@/lib/windComponents";
 import { calculateRunwayLength, type RunwayLengthInputs } from "@/lib/runwayLength";
@@ -166,6 +166,28 @@ const AirportPage = () => {
     });
   }, [parsedData, sectorType, calmThresh, monthFilter]);
 
+  const windRoseConsultant = useMemo<WindRoseResult | null>(() => {
+    if (!parsedData) return null;
+    return calculateWindRose(parsedData.records, {
+      sectorSize: parseFloat(sectorType),
+      speedBins: CONSULTANT_GRID_SPEED_EDGES,
+      calmThreshold: parseFloat(calmThresh) || 1,
+      useGust: false,
+      monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
+      seasonFilter: null,
+    });
+  }, [parsedData, sectorType, calmThresh, monthFilter]);
+
+  const consultantRefSpeedKt = useMemo(() => {
+    if (!parsedData) return 25;
+    let m = 12;
+    for (const r of parsedData.records) {
+      if (!r.isValid) continue;
+      if (r.wind_speed_kt > m) m = r.wind_speed_kt;
+    }
+    return Math.min(45, Math.max(15, m));
+  }, [parsedData]);
+
   const prevailingWind = useMemo(() => {
     if (!windRose) return null;
     const max = windRose.bins.reduce((a, b) => a.totalFrequency > b.totalFrequency ? a : b);
@@ -197,15 +219,22 @@ const AirportPage = () => {
   const effectiveXw = xwLimit === "custom" ? parseFloat(customXw) || 20 : parseFloat(xwLimit);
 
   const overlaySvg = useMemo(() => {
-    if (!windRose || candidates.length === 0) return "";
-    return renderRunwayOverlayWindRose(
-      windRose,
-      candidates.map(c => c.runwayHeading),
-      candidates,
-      effectiveXw,
-      { title: "Runway Overlay — Wind Rose" }
-    );
-  }, [windRose, candidates, effectiveXw]);
+    if (!windRoseConsultant) return "";
+    const best =
+      candidates.length > 0
+        ? candidates.reduce((a, b) => (a.usabilityPercent >= b.usabilityPercent ? a : b))
+        : null;
+    return renderConsultantGridWindRose(windRoseConsultant, {
+      size: 620,
+      title: "Wind distribution grid — runway corridor",
+      subtitle: best
+        ? `Axis ${String(best.runwayHeading).padStart(3, "0")}° / ${String(best.reciprocal).padStart(3, "0")}° · ${best.usabilityPercent.toFixed(1)}% usability @ ${effectiveXw} kt XW`
+        : "Speed rings 0–4, 4–6, 6–10 kt … — analyze a heading to show hatched low-crosswind corridor (width from L/V)",
+      runwayHeadingDeg: best?.runwayHeading ?? null,
+      crosswindLimitKt: best != null ? effectiveXw : undefined,
+      refSpeedKt: consultantRefSpeedKt,
+    });
+  }, [windRoseConsultant, candidates, effectiveXw, consultantRefSpeedKt]);
 
   const bestCandidate = candidates.length > 0
     ? candidates.reduce((a, b) => a.usabilityPercent > b.usabilityPercent ? a : b)
@@ -247,6 +276,7 @@ const AirportPage = () => {
     setAirportReportData({
       projName, projLoc, elevation, refTemp, gradient, aeroCode, notes,
       windData: parsedData, windRose,
+      windRoseConsultant, consultantRefSpeedKt,
       candidates, optimization,
       xwLimit: effectiveXw,
       crosswindIsCustom: xwLimit === "custom",
@@ -257,7 +287,7 @@ const AirportPage = () => {
     });
   }, [
     projName, projLoc, elevation, refTemp, gradient, aeroCode, notes,
-    parsedData, windRose, candidates, optimization, effectiveXw, xwLimit, customXw,
+    parsedData, windRose, windRoseConsultant, consultantRefSpeedKt, candidates, optimization, effectiveXw, xwLimit, customXw,
     rlResult, rlInputs, selectedAc, baseLength, surface,
     setAirportReportData
   ]);
@@ -624,12 +654,15 @@ const AirportPage = () => {
                         )}
                       </div>
                       <div className="col-span-12 lg:col-span-9 space-y-4">
-                        <ChartContainer title="Wind Rose — Runway Overlay" className="min-h-[380px]">
+                        <ChartContainer title="Wind distribution grid & runway corridor" className="min-h-[420px]">
                           {overlaySvg ? (
-                            <div className="w-full flex justify-center" dangerouslySetInnerHTML={{ __html: overlaySvg }} />
+                            <div className="w-full flex justify-center overflow-x-auto" dangerouslySetInnerHTML={{ __html: overlaySvg }} />
                           ) : (
-                            <p className="text-sm text-muted-foreground text-center py-16">Analyze a heading to see the runway overlay</p>
+                            <p className="text-sm text-muted-foreground text-center py-16">Wind data needed for grid rose</p>
                           )}
+                          <p className="text-[10px] text-muted-foreground text-center mt-2 max-w-xl mx-auto leading-snug">
+                            Each cell is % of all observations in that direction and speed ring. Hatched wedges follow runway ± arcsin(crosswind limit ÷ ref speed); narrower band = stricter crosswind or stronger winds in the dataset.
+                          </p>
                         </ChartContainer>
                         {candidates.length > 0 && (
                           <InstrumentCard title="Candidate Headings">

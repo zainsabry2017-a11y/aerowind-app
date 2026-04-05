@@ -12,10 +12,10 @@ import ApproachAdvisor from "@/components/ApproachAdvisor";
 import HelipadUsability from "@/components/HelipadUsability";
 import { AeroInput, AeroSelect } from "@/components/AeroInput";
 import { parseWindData, parsedWindDataFromNormalizedPublicData, type ParsedWindData } from "@/lib/windDataParser";
-import { calculateWindRose, DEFAULT_WIND_ROSE_OPTIONS, type WindRoseResult } from "@/lib/windRoseCalculator";
+import { calculateWindRose, CONSULTANT_GRID_SPEED_EDGES, DEFAULT_WIND_ROSE_OPTIONS, type WindRoseResult } from "@/lib/windRoseCalculator";
 import { windDirectionReferenceTableRows } from "@/lib/windDirectionSectors";
 import { generateSafetyWarnings, DATA_LABELS, getConfidenceLevel } from "@/lib/engineeringSafety";
-import { renderExecutiveWindRose, renderEngineeringWindRose } from "@/lib/windRoseRenderer";
+import { renderConsultantGridWindRose, renderEngineeringWindRose, renderExecutiveWindRose } from "@/lib/windRoseRenderer";
 import { exportCSV, exportSVGAsPNG } from "@/lib/exportUtils";
 import { loadSampleDataAsFile, downloadSampleCSV, SAMPLE_PRESETS } from "@/lib/sampleDataGenerator";
 import { useAnalysis } from "@/contexts/AnalysisContext";
@@ -32,7 +32,7 @@ const WindRosePage = () => {
   const [sectorType, setSectorType] = useState("22.5");
   const [useGust, setUseGust] = useState("no");
   const [monthFilter, setMonthFilter] = useState("all");
-  const [roseStyle, setRoseStyle] = useState<"executive" | "engineering">("executive");
+  const [roseStyle, setRoseStyle] = useState<"executive" | "engineering" | "consultant">("executive");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSamplePanel, setShowSamplePanel] = useState(false);
@@ -114,12 +114,14 @@ const WindRosePage = () => {
     return calculateWindRose(effectiveParsedData.records, {
       ...DEFAULT_WIND_ROSE_OPTIONS,
       sectorSize: parseFloat(sectorType),
+      speedBins:
+        roseStyle === "consultant" ? CONSULTANT_GRID_SPEED_EDGES : DEFAULT_WIND_ROSE_OPTIONS.speedBins,
       calmThreshold: parseFloat(calmThreshold) || 1,
       useGust: useGust === "yes",
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
     });
-  }, [effectiveParsedData, sectorType, calmThreshold, useGust, monthFilter]);
+  }, [effectiveParsedData, sectorType, calmThreshold, useGust, monthFilter, roseStyle]);
 
   const inheritedHelipadXw = 15;
   const effectiveHelipadWindRose = useMemo(() => {
@@ -141,6 +143,12 @@ const WindRosePage = () => {
   const svgString = useMemo(() => {
     if (!windRose) return "";
     const opts = { title: "Wind Rose Analysis", subtitle: `${windRose.totalObservations.toLocaleString()} observations | ${DATA_LABELS.icaoCompliant}` };
+    if (roseStyle === "consultant") {
+      return renderConsultantGridWindRose(windRose, {
+        ...opts,
+        subtitle: `${opts.subtitle} · Grid 0–4, 4–6, 6–10 kt … (use Airport/Heliport for runway corridor)`,
+      });
+    }
     return roseStyle === "engineering"
       ? renderEngineeringWindRose(windRose, opts)
       : renderExecutiveWindRose(windRose, opts);
@@ -340,6 +348,7 @@ const WindRosePage = () => {
                 <AeroSelect label="Rose Style" value={roseStyle} onChange={(v) => setRoseStyle(v as any)} options={[
                   { value: "executive", label: "Executive (Presentation)" },
                   { value: "engineering", label: "Engineering (Detail)" },
+                  { value: "consultant", label: "Consultant grid (dir × speed %)" },
                 ]} />
                 <AeroSelect label="Month Filter" value={monthFilter} onChange={setMonthFilter} options={[
                   { value: "all", label: "All Months" },

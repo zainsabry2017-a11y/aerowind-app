@@ -16,8 +16,8 @@ import { AeroInput, AeroSelect } from "@/components/AeroInput";
 import AeroDataTable from "@/components/AeroDataTable";
 
 import { parseWindData, type ParsedWindData, type WindRecord } from "@/lib/windDataParser";
-import { calculateWindRose, windVectorMeanDirectionDeg } from "@/lib/windRoseCalculator";
-import { renderExecutiveWindRose, renderEngineeringWindRose, renderRunwayOverlayWindRose } from "@/lib/windRoseRenderer";
+import { calculateWindRose, CONSULTANT_GRID_SPEED_EDGES, windVectorMeanDirectionDeg } from "@/lib/windRoseCalculator";
+import { renderConsultantGridWindRose, renderEngineeringWindRose, renderExecutiveWindRose } from "@/lib/windRoseRenderer";
 import { calculateRunwayUsability, type RunwayUsabilityResult, optimizeRunwayOrientation, type OptimizationResult } from "@/lib/windComponents";
 import { aircraftDatabase, searchAircraft, filterByCategory, type AircraftData } from "@/data/aircraftDatabase";
 import { loadSampleDataAsFile, SAMPLE_PRESETS } from "@/lib/sampleDataGenerator";
@@ -143,6 +143,27 @@ const WaterRunwayPage = () => {
     });
   }, [records, sectorType, calmThresh, monthFilter]);
 
+  const windRoseConsultant = useMemo(() => {
+    if (records.length === 0) return null;
+    return calculateWindRose(records, {
+      sectorSize: parseFloat(sectorType),
+      speedBins: CONSULTANT_GRID_SPEED_EDGES,
+      calmThreshold: parseFloat(calmThresh) || 1,
+      useGust: false,
+      monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
+      seasonFilter: null,
+    });
+  }, [records, sectorType, calmThresh, monthFilter]);
+
+  const consultantRefSpeedKt = useMemo(() => {
+    let m = 12;
+    for (const r of records) {
+      if (!r.isValid) continue;
+      if (r.wind_speed_kt > m) m = r.wind_speed_kt;
+    }
+    return Math.min(45, Math.max(15, m));
+  }, [records]);
+
   const prevailingWind = useMemo(() => {
     if (!windRose || windRose.bins.length === 0) return null;
     const max = windRose.bins.reduce((a, b) => a.totalFrequency > b.totalFrequency ? a : b);
@@ -189,6 +210,7 @@ const WaterRunwayPage = () => {
     setWaterReportData({
       projName, projLoc, elevation, notes,
       windData: parsedData, windRose,
+      windRoseConsultant, consultantRefSpeedKt,
       candidates, optimization,
       xwLimit: effectiveXw,
       crosswindIsCustom: xwLimit === "custom",
@@ -198,7 +220,7 @@ const WaterRunwayPage = () => {
       channelType, availDepth, currentSpeed
     });
   }, [
-    projName, projLoc, elevation, notes, parsedData, windRose,
+    projName, projLoc, elevation, notes, parsedData, windRose, windRoseConsultant, consultantRefSpeedKt,
     candidates, optimization, effectiveXw, xwLimit, customXw, rwHeading, selectedAc,
     waveState, waterType, waterTemp, channelType, availDepth, currentSpeed,
     setWaterReportData
@@ -211,9 +233,22 @@ const WaterRunwayPage = () => {
   }, [windRose, roseStyle, projName]);
 
   const overlaySvg = useMemo(() => {
-    if (!windRose || candidates.length === 0) return "";
-    return renderRunwayOverlayWindRose(windRose, candidates.map(c => c.runwayHeading), candidates, effectiveXw, { title: "Channel Alignment Overlay — Wind Rose" });
-  }, [windRose, candidates, effectiveXw]);
+    if (!windRoseConsultant) return "";
+    const best =
+      candidates.length > 0
+        ? candidates.reduce((a, b) => (a.usabilityPercent >= b.usabilityPercent ? a : b))
+        : null;
+    return renderConsultantGridWindRose(windRoseConsultant, {
+      size: 620,
+      title: "Wind distribution grid — channel alignment",
+      subtitle: best
+        ? `Axis ${String(best.runwayHeading).padStart(3, "0")}° / ${String(best.reciprocal).padStart(3, "0")}° · ${best.usabilityPercent.toFixed(1)}% @ ${effectiveXw} kt XW`
+        : "Analyze alignment — hatched corridor uses crosswind limit and ref wind speed",
+      runwayHeadingDeg: best?.runwayHeading ?? null,
+      crosswindLimitKt: best != null ? effectiveXw : undefined,
+      refSpeedKt: consultantRefSpeedKt,
+    });
+  }, [windRoseConsultant, candidates, effectiveXw, consultantRefSpeedKt]);
 
   // ── Handling ──
   const handleFile = useCallback(async (file: File) => {
