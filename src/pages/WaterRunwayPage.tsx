@@ -26,6 +26,7 @@ import ScenarioComparison from "@/components/ScenarioComparison";
 import { DISCLAIMER, DATA_LABELS } from "@/lib/engineeringSafety";
 import { useAnalysis, type WaterReportData } from "@/contexts/AnalysisContext";
 import { exportCSV } from "@/lib/exportUtils";
+import { formatSpeedBinEdges, parseSpeedBinEdges } from "@/lib/speedBins";
 
 // ── Tabs ──
 const TABS = [
@@ -82,7 +83,7 @@ const WaterRunwayPage = () => {
   };
   const goPrev = () => setActiveTab(TABS[Math.max(tabIdx - 1, 0)].id);
 
-  const { waterReportData, setWaterReportData } = useAnalysis();
+  const { waterReportData, setWaterReportData, speedBinEdges, setSpeedBinEdges } = useAnalysis();
 
   // Tab 1 — Project Info
   const [projName, setProjName] = useState(waterReportData?.projName || "");
@@ -98,6 +99,8 @@ const WaterRunwayPage = () => {
   const [calmThresh, setCalmThresh] = useState("1");
   const [sectorType, setSectorType] = useState("22.5");
   const [monthFilter, setMonthFilter] = useState("all");
+  const [speedBinsInput, setSpeedBinsInput] = useState(() => formatSpeedBinEdges(speedBinEdges));
+  const [speedBinsError, setSpeedBinsError] = useState<string | null>(null);
 
   const [waterType, setWaterType] = useState(waterReportData?.waterType || "lake");
   const [waterTemp, setWaterTemp] = useState(waterReportData?.waterTemp || "20");
@@ -135,25 +138,25 @@ const WaterRunwayPage = () => {
     if (records.length === 0) return null;
     return calculateWindRose(records, {
       sectorSize: parseFloat(sectorType),
-      speedBins: [1, 4, 6, 10, 16, 21, 41],
+      speedBins: speedBinEdges,
       calmThreshold: parseFloat(calmThresh) || 1,
       useGust: false,
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
     });
-  }, [records, sectorType, calmThresh, monthFilter]);
+  }, [records, sectorType, calmThresh, monthFilter, speedBinEdges]);
 
   const windRoseConsultant = useMemo(() => {
     if (records.length === 0) return null;
     return calculateWindRose(records, {
       sectorSize: parseFloat(sectorType),
-      speedBins: CONSULTANT_GRID_SPEED_EDGES,
+      speedBins: speedBinEdges,
       calmThreshold: parseFloat(calmThresh) || 1,
       useGust: false,
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
     });
-  }, [records, sectorType, calmThresh, monthFilter]);
+  }, [records, sectorType, calmThresh, monthFilter, speedBinEdges]);
 
   const consultantRefSpeedKt = useMemo(() => {
     let m = 12;
@@ -247,6 +250,7 @@ const WaterRunwayPage = () => {
       runwayHeadingDeg: best?.runwayHeading ?? null,
       crosswindLimitKt: best != null ? effectiveXw : undefined,
       refSpeedKt: consultantRefSpeedKt,
+      compact: true,
     });
   }, [windRoseConsultant, candidates, effectiveXw, consultantRefSpeedKt]);
 
@@ -403,6 +407,23 @@ const WaterRunwayPage = () => {
                   <InstrumentCard title="Analysis Options">
                     <div className="space-y-3">
                       <AeroInput label="Calm Threshold" placeholder="3" unit="KT" value={calmThresh} onChange={setCalmThresh} />
+                      <AeroInput
+                        label="Speed bins (edges)"
+                        placeholder="0, 4, 6, 10, 14, 18, 25, 35"
+                        unit="KT"
+                        value={speedBinsInput}
+                        onChange={(v) => {
+                          setSpeedBinsInput(v);
+                          const parsed = parseSpeedBinEdges(v);
+                          setSpeedBinsError(parsed.error);
+                          if (parsed.edges) setSpeedBinEdges(parsed.edges);
+                        }}
+                      />
+                      {speedBinsError ? (
+                        <p className="text-[10px] text-warning font-mono-data">{speedBinsError}</p>
+                      ) : (
+                        <p className="text-[10px] text-muted-foreground font-mono-data">Updates Speed Distribution + grid rings.</p>
+                      )}
                       <AeroSelect label="Sector Size" value={sectorType} onChange={setSectorType} options={[{ value: "22.5", label: "22.5° (16 sectors)" },{ value: "10", label: "10° (36 sectors)" },{ value: "45", label: "45° (8 sectors)" }]} />
                       <AeroSelect label="Month Filter" value={monthFilter} onChange={setMonthFilter} options={[{ value: "all", label: "All Months" },...Array.from({ length: 12 }, (_, i) => ({ value: String(i + 1), label: new Date(0, i).toLocaleString("en", { month: "long" }) }))]} />
                     </div>

@@ -19,6 +19,7 @@ import { renderConsultantGridWindRose, renderEngineeringWindRose, renderExecutiv
 import { exportCSV, exportSVGAsPNG } from "@/lib/exportUtils";
 import { loadSampleDataAsFile, downloadSampleCSV, SAMPLE_PRESETS } from "@/lib/sampleDataGenerator";
 import { useAnalysis } from "@/contexts/AnalysisContext";
+import { formatSpeedBinEdges, parseSpeedBinEdges } from "@/lib/speedBins";
 import { fetchAndParseMeteostat } from "@/lib/publicWeatherParser";
 import { applyWindAdjustments } from "@/lib/windAdjustments";
 import CoordinatePickerMap from "@/components/CoordinatePickerMap";
@@ -33,6 +34,9 @@ const WindRosePage = () => {
   const [useGust, setUseGust] = useState("no");
   const [monthFilter, setMonthFilter] = useState("all");
   const [roseStyle, setRoseStyle] = useState<"executive" | "engineering" | "consultant">("executive");
+  const { speedBinEdges, setSpeedBinEdges } = analysis;
+  const [speedBinsInput, setSpeedBinsInput] = useState(() => formatSpeedBinEdges(speedBinEdges));
+  const [speedBinsError, setSpeedBinsError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showSamplePanel, setShowSamplePanel] = useState(false);
@@ -114,14 +118,13 @@ const WindRosePage = () => {
     return calculateWindRose(effectiveParsedData.records, {
       ...DEFAULT_WIND_ROSE_OPTIONS,
       sectorSize: parseFloat(sectorType),
-      speedBins:
-        roseStyle === "consultant" ? CONSULTANT_GRID_SPEED_EDGES : DEFAULT_WIND_ROSE_OPTIONS.speedBins,
+      speedBins: speedBinEdges,
       calmThreshold: parseFloat(calmThreshold) || 1,
       useGust: useGust === "yes",
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
     });
-  }, [effectiveParsedData, sectorType, calmThreshold, useGust, monthFilter, roseStyle]);
+  }, [effectiveParsedData, sectorType, calmThreshold, useGust, monthFilter, roseStyle, speedBinEdges]);
 
   const inheritedHelipadXw = 15;
   const effectiveHelipadWindRose = useMemo(() => {
@@ -147,6 +150,7 @@ const WindRosePage = () => {
       return renderConsultantGridWindRose(windRose, {
         ...opts,
         subtitle: `${opts.subtitle} · Grid 0–4, 4–6, 6–10 kt … (use Airport/Heliport for runway corridor)`,
+        compact: true,
       });
     }
     return roseStyle === "engineering"
@@ -336,6 +340,23 @@ const WindRosePage = () => {
             <InstrumentCard title="Parameters">
               <div className="space-y-4">
                 <AeroInput label="Calm Threshold" placeholder="1.0" unit="KTS" value={calmThreshold} onChange={setCalmThreshold} />
+                <AeroInput
+                  label="Speed bins (edges)"
+                  placeholder="0, 4, 6, 10, 14, 18, 25, 35"
+                  unit="KT"
+                  value={speedBinsInput}
+                  onChange={(v) => {
+                    setSpeedBinsInput(v);
+                    const parsed = parseSpeedBinEdges(v);
+                    setSpeedBinsError(parsed.error);
+                    if (parsed.edges) setSpeedBinEdges(parsed.edges);
+                  }}
+                />
+                {speedBinsError ? (
+                  <p className="text-[10px] text-warning font-mono-data">{speedBinsError}</p>
+                ) : (
+                  <p className="text-[10px] text-muted-foreground font-mono-data">Updates Speed Distribution + all grid rings.</p>
+                )}
                 <AeroSelect label="Sector Size" value={sectorType} onChange={setSectorType} options={[
                   { value: "10", label: "10° (36 sectors)" },
                   { value: "15", label: "15° (24 sectors)" },

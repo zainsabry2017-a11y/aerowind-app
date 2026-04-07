@@ -321,6 +321,7 @@ async function windFiguresBlocks(label: string, windRose: any, analysisCtx?: Doc
         crosswindLimitKt:
           ori != null && Number.isFinite(ori) && cwLim != null && Number.isFinite(cwLim) && cwLim > 0 ? cwLim : undefined,
         refSpeedKt: refV,
+        compact: true,
       });
       const consultantPng = await svgToPngDataUri(consultantSvg, 1000);
       blocks.push(heading("Consultant wind grid (direction x speed)", HeadingLevel.HEADING_3, 120, 80));

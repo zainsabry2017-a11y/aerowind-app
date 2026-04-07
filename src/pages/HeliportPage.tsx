@@ -39,6 +39,7 @@ import { renderConsultantGridWindRose, renderEngineeringWindRose, renderExecutiv
 import { loadSampleDataAsFile, downloadSampleCSV, SAMPLE_PRESETS } from "@/lib/sampleDataGenerator";
 import { exportCSV } from "@/lib/exportUtils";
 import { useAnalysis } from "@/contexts/AnalysisContext";
+import { formatSpeedBinEdges, parseSpeedBinEdges } from "@/lib/speedBins";
 import { Wind, Download, Database, ChevronRight, ChevronLeft, CheckCircle2 } from "lucide-react";
 import DataSourcesModule from "@/components/DataSourcesModule";
 import ScenarioComparison from "@/components/ScenarioComparison";
@@ -89,7 +90,7 @@ const HeliportPage = () => {
   };
   const goPrev = () => setActiveTab(TABS[Math.max(tabIdx - 1, 0)].id);
 
-  const { heliportReportData, setHeliportReportData } = useAnalysis();
+  const { heliportReportData, setHeliportReportData, speedBinEdges, setSpeedBinEdges } = useAnalysis();
 
   const [projectName, setProjectName] = useState(heliportReportData?.projName || "");
   const [projectLoc, setProjectLoc] = useState(heliportReportData?.projectLoc || "");
@@ -107,6 +108,8 @@ const HeliportPage = () => {
   const [monthFilter, setMonthFilter] = useState("all");
   const [sectorType, setSectorType] = useState("22.5");
   const [useGust, setUseGust] = useState(false);
+  const [speedBinsInput, setSpeedBinsInput] = useState(() => formatSpeedBinEdges(speedBinEdges));
+  const [speedBinsError, setSpeedBinsError] = useState<string | null>(null);
   const [helipadUseCustomXw, setHelipadUseCustomXw] = useState(heliportReportData?.helipadUseCustomXw ?? false);
   const [helipadCustomXw, setHelipadCustomXw] = useState(heliportReportData?.helipadCustomXw ?? "");
   /** Live FATO from Tab 4 Helipad Usability (candidates or “show optimal”); chart & reports use this when set. */
@@ -188,24 +191,25 @@ const HeliportPage = () => {
     return calculateWindRose(parsedData.records, {
       ...DEFAULT_WIND_ROSE_OPTIONS,
       sectorSize: parseFloat(sectorType),
+      speedBins: speedBinEdges,
       calmThreshold: effectiveCalmThreshold,
       useGust,
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
     });
-  }, [parsedData, sectorType, effectiveCalmThreshold, useGust, monthFilter]);
+  }, [parsedData, sectorType, effectiveCalmThreshold, useGust, monthFilter, speedBinEdges]);
 
   const windRoseConsultant = useMemo<WindRoseResult | null>(() => {
     if (!parsedData) return null;
     return calculateWindRose(parsedData.records, {
       sectorSize: parseFloat(sectorType),
-      speedBins: CONSULTANT_GRID_SPEED_EDGES,
+      speedBins: speedBinEdges,
       calmThreshold: effectiveCalmThreshold,
       useGust,
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
     });
-  }, [parsedData, sectorType, effectiveCalmThreshold, useGust, monthFilter]);
+  }, [parsedData, sectorType, effectiveCalmThreshold, useGust, monthFilter, speedBinEdges]);
 
   const consultantRefSpeedKt = useMemo(() => {
     if (!parsedData) return 25;
@@ -285,6 +289,7 @@ const HeliportPage = () => {
       runwayHeadingDeg: fatoResult.optimalHeading,
       crosswindLimitKt: effectiveHelipadXw,
       refSpeedKt: consultantRefSpeedKt,
+      compact: true,
     });
   }, [windRoseConsultant, fatoResult, effectiveHelipadXw, consultantRefSpeedKt]);
 
@@ -532,6 +537,25 @@ const HeliportPage = () => {
                   <InstrumentCard title="Analysis Parameters">
                     <div className="space-y-4">
                       <AeroInput label="Calm Threshold" placeholder="1.0" unit="KTS" value={calmThreshold} onChange={setCalmThreshold} />
+                      <AeroInput
+                        label="Speed bins (edges)"
+                        placeholder="0, 4, 6, 10, 14, 18, 25, 35"
+                        unit="KT"
+                        value={speedBinsInput}
+                        onChange={(v) => {
+                          setSpeedBinsInput(v);
+                          const parsed = parseSpeedBinEdges(v);
+                          setSpeedBinsError(parsed.error);
+                          if (parsed.edges) setSpeedBinEdges(parsed.edges);
+                        }}
+                      />
+                      {speedBinsError ? (
+                        <p className="text-[10px] text-warning font-mono-data">{speedBinsError}</p>
+                      ) : (
+                        <p className="text-[10px] text-muted-foreground font-mono-data">
+                          Updates Speed Distribution + grid rings everywhere.
+                        </p>
+                      )}
                       <AeroSelect label="Sector Size" value={sectorType} onChange={setSectorType} options={[
                         { value: "10", label: "10° (36 sectors)" },
                         { value: "15", label: "15° (24 sectors)" },

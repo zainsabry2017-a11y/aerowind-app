@@ -27,6 +27,7 @@ import DataSourcesModule from "@/components/DataSourcesModule";
 import ScenarioComparison from "@/components/ScenarioComparison";
 
 import { useAnalysis, type AirportReportData } from "@/contexts/AnalysisContext";
+import { formatSpeedBinEdges, parseSpeedBinEdges } from "@/lib/speedBins";
 import { Wind, Download, Database, ChevronRight, ChevronLeft, CheckCircle2, Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -87,7 +88,7 @@ const AirportPage = () => {
   };
   const goPrev = () => setActiveTab(TABS[Math.max(tabIdx - 1, 0)].id);
 
-  const { airportReportData, setAirportReportData } = useAnalysis();
+  const { airportReportData, setAirportReportData, speedBinEdges, setSpeedBinEdges } = useAnalysis();
 
   // Tab 1 — Project Info
   const [projName, setProjName] = useState(airportReportData?.projName || "");
@@ -106,6 +107,8 @@ const AirportPage = () => {
   const [calmThresh, setCalmThresh] = useState("1");
   const [sectorType, setSectorType] = useState("22.5");
   const [monthFilter, setMonthFilter] = useState("all");
+  const [speedBinsInput, setSpeedBinsInput] = useState(() => formatSpeedBinEdges(speedBinEdges));
+  const [speedBinsError, setSpeedBinsError] = useState<string | null>(null);
 
   // Tab 3 — Wind Rose
   const [roseStyle, setRoseStyle] = useState<"executive" | "engineering">("executive");
@@ -159,24 +162,25 @@ const AirportPage = () => {
     return calculateWindRose(parsedData.records, {
       ...DEFAULT_WIND_ROSE_OPTIONS,
       sectorSize: parseFloat(sectorType),
+      speedBins: speedBinEdges,
       calmThreshold: parseFloat(calmThresh) || 1,
       useGust: false,
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
     });
-  }, [parsedData, sectorType, calmThresh, monthFilter]);
+  }, [parsedData, sectorType, calmThresh, monthFilter, speedBinEdges]);
 
   const windRoseConsultant = useMemo<WindRoseResult | null>(() => {
     if (!parsedData) return null;
     return calculateWindRose(parsedData.records, {
       sectorSize: parseFloat(sectorType),
-      speedBins: CONSULTANT_GRID_SPEED_EDGES,
+      speedBins: speedBinEdges,
       calmThreshold: parseFloat(calmThresh) || 1,
       useGust: false,
       monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
       seasonFilter: null,
     });
-  }, [parsedData, sectorType, calmThresh, monthFilter]);
+  }, [parsedData, sectorType, calmThresh, monthFilter, speedBinEdges]);
 
   const consultantRefSpeedKt = useMemo(() => {
     if (!parsedData) return 25;
@@ -233,6 +237,7 @@ const AirportPage = () => {
       runwayHeadingDeg: best?.runwayHeading ?? null,
       crosswindLimitKt: best != null ? effectiveXw : undefined,
       refSpeedKt: consultantRefSpeedKt,
+      compact: true,
     });
   }, [windRoseConsultant, candidates, effectiveXw, consultantRefSpeedKt]);
 
@@ -452,6 +457,25 @@ const AirportPage = () => {
                   <InstrumentCard title="Analysis Options">
                     <div className="space-y-3">
                       <AeroInput label="Calm Threshold" placeholder="1" unit="KT" value={calmThresh} onChange={setCalmThresh} />
+                      <AeroInput
+                        label="Speed bins (edges)"
+                        placeholder="0, 4, 6, 10, 14, 18, 25, 35"
+                        unit="KT"
+                        value={speedBinsInput}
+                        onChange={(v) => {
+                          setSpeedBinsInput(v);
+                          const parsed = parseSpeedBinEdges(v);
+                          setSpeedBinsError(parsed.error);
+                          if (parsed.edges) setSpeedBinEdges(parsed.edges);
+                        }}
+                      />
+                      {speedBinsError ? (
+                        <p className="text-[10px] text-warning font-mono-data">{speedBinsError}</p>
+                      ) : (
+                        <p className="text-[10px] text-muted-foreground font-mono-data">
+                          Updates Speed Distribution + consultant grid rings across pages.
+                        </p>
+                      )}
                       <AeroSelect label="Sector Size" value={sectorType} onChange={setSectorType} options={[
                         { value: "22.5", label: "22.5° (16 sectors)" },
                         { value: "10", label: "10° (36 sectors)" },

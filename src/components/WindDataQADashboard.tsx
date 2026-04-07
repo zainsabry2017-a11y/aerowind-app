@@ -108,39 +108,39 @@ export default function WindDataQADashboard(props: { data: ParsedWindData }) {
             Month <span className="font-mono-data">1</span> = January, <span className="font-mono-data">2</span> = February, …{" "}
             <span className="font-mono-data">12</span> = December.
           </p>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 [grid-auto-rows:1fr]">
+          {/* Month tiles: clean 4×3 grid with stable typography */}
+          <div className="grid grid-cols-4 gap-2">
             {CALENDAR_MONTHS.map((m, i) => {
               const shortName = new Date(2000, i, 1).toLocaleString("en", { month: "short" });
               return (
                 <div
                   key={m.num}
-                  className="flex min-h-[4.5rem] min-w-0 flex-col justify-between gap-1.5 overflow-hidden rounded-sm border border-border bg-card/30 px-2.5 py-2"
+                  className="flex min-h-[4.1rem] flex-col justify-between gap-1 overflow-hidden rounded-sm border border-border bg-card/30 px-2 py-2"
                 >
-                  <div className="min-w-0 text-[9px] font-mono-data leading-tight text-muted-foreground">
+                  <div className="flex items-center justify-between text-[8px] font-mono-data leading-tight text-muted-foreground whitespace-nowrap">
                     <span className="tabular-nums text-foreground/90">{m.num}</span>
-                    <span className="mx-1 opacity-40">·</span>
-                    <span className="break-words">{shortName}</span>
+                    <span className="opacity-70">{shortName}</span>
                   </div>
-                  <p className="text-right text-sm font-mono-data tabular-nums leading-none tracking-tight text-foreground">
+                  <p className="text-right text-[12px] font-mono-data tabular-nums leading-none tracking-tight text-foreground whitespace-nowrap">
                     {qa.monthCounts[i].toLocaleString()}
                   </p>
                 </div>
               );
             })}
           </div>
-          <div className="mt-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+          <div className="mt-3 grid grid-cols-2 gap-2">
             {METEOROLOGICAL_SEASONS.map((s, i) => (
               <div
                 key={s.label}
-                className="flex min-h-[4.75rem] min-w-0 flex-col gap-2 overflow-hidden rounded-sm border border-border bg-card/30 px-3 py-2.5 sm:flex-row sm:items-stretch sm:justify-between sm:gap-3"
+                className="flex min-h-[4.4rem] min-w-0 flex-col gap-2 overflow-hidden rounded-sm border border-border bg-card/30 px-3 py-2.5"
               >
                 <div className="min-w-0 flex-1">
-                  <p className="text-[10px] font-mono-data text-foreground">{s.label}</p>
-                  <p className="mt-1 text-[9px] leading-snug text-muted-foreground">{s.monthsNamed}</p>
+                  <p className="text-[10px] font-mono-data text-foreground whitespace-nowrap">{s.label}</p>
+                  <p className="mt-1 text-[9px] leading-snug text-muted-foreground line-clamp-2">{s.monthsNamed}</p>
                 </div>
-                <div className="shrink-0 border-t border-border pt-2 sm:flex sm:flex-col sm:justify-center sm:border-l sm:border-t-0 sm:pl-3 sm:pt-0 sm:text-right">
+                <div className="flex items-end justify-between border-t border-border pt-2">
                   <p className="text-[8px] uppercase tracking-[0.14em] text-muted-foreground">Rows</p>
-                  <p className="mt-0.5 text-sm font-mono-data tabular-nums text-foreground sm:mt-1">
+                  <p className="text-[12px] font-mono-data tabular-nums text-foreground whitespace-nowrap">
                     {qa.seasonCounts[i].toLocaleString()}
                   </p>
                 </div>

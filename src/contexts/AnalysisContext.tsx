@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from "react";
 import type { ParsedWindData, WindRecord } from "@/lib/windDataParser";
 import type { WindRoseResult } from "@/lib/windRoseCalculator";
+import { DEFAULT_WIND_ROSE_OPTIONS } from "@/lib/windRoseCalculator";
 import type { RunwayUsabilityResult, OptimizationResult } from "@/lib/windComponents";
 import type { RunwayLengthResult } from "@/lib/runwayLength";
 
@@ -87,6 +88,8 @@ interface AnalysisState {
   // Legacy / existing state
   windData: ParsedWindData | null;
   windRose: WindRoseResult | null;
+  /** Global speed bin edges (kt) used for speed distribution and binning */
+  speedBinEdges: number[];
   runwayCandidates: RunwayUsabilityResult[];
   runwayOptimization: OptimizationResult | null;
   crosswindLimit: number;
@@ -104,6 +107,7 @@ interface AnalysisState {
 interface AnalysisContextType extends AnalysisState {
   setWindData: (data: ParsedWindData | null) => void;
   setWindRose: (rose: WindRoseResult | null) => void;
+  setSpeedBinEdges: (edges: number[]) => void;
   setRunwayCandidates: (candidates: RunwayUsabilityResult[]) => void;
   setRunwayOptimization: (opt: OptimizationResult | null) => void;
   setCrosswindLimit: (limit: number) => void;
@@ -126,6 +130,7 @@ const STORAGE_KEY = "aerowind.analysis.v1";
 const DEFAULT_STATE: AnalysisState = {
   windData: null,
   windRose: null,
+  speedBinEdges: DEFAULT_WIND_ROSE_OPTIONS.speedBins,
   runwayCandidates: [],
   runwayOptimization: null,
   crosswindLimit: 13,
@@ -173,6 +178,7 @@ export const AnalysisProvider = ({ children }: { children: ReactNode }) => {
 
   const setWindData = useCallback((data: ParsedWindData | null) => setState(s => ({ ...s, windData: data })), []);
   const setWindRose = useCallback((rose: WindRoseResult | null) => setState(s => ({ ...s, windRose: rose })), []);
+  const setSpeedBinEdges = useCallback((edges: number[]) => setState(s => ({ ...s, speedBinEdges: edges })), []);
   const setRunwayCandidates = useCallback((candidates: RunwayUsabilityResult[]) => setState(s => ({ ...s, runwayCandidates: candidates })), []);
   const setRunwayOptimization = useCallback((opt: OptimizationResult | null) => setState(s => ({ ...s, runwayOptimization: opt })), []);
   const setCrosswindLimit = useCallback((limit: number) => setState(s => ({ ...s, crosswindLimit: limit })), []);
@@ -189,7 +195,7 @@ export const AnalysisProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   return (
-    <AnalysisContext.Provider value={{ ...state, setWindData, setWindRose, setRunwayCandidates, setRunwayOptimization, setCrosswindLimit, setRunwayLength, setWaterRunway, setHelipad, setAirportReportData, setHeliportReportData, setWaterReportData, hydrate }}>
+    <AnalysisContext.Provider value={{ ...state, setWindData, setWindRose, setSpeedBinEdges, setRunwayCandidates, setRunwayOptimization, setCrosswindLimit, setRunwayLength, setWaterRunway, setHelipad, setAirportReportData, setHeliportReportData, setWaterReportData, hydrate }}>
       {children}
     </AnalysisContext.Provider>
   );

@@ -382,6 +382,7 @@ const ReportPage = () => {
           crosswindLimitKt:
             orientation != null && Number.isFinite(orientation) && cwLimit > 0 ? cwLimit : undefined,
           refSpeedKt: consultantRefKt,
+          compact: true,
         })
       : "";
     const consultantUri = consultantSvg ? svgToDataUri(consultantSvg) : "";

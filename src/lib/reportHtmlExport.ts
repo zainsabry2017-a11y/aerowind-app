@@ -181,6 +181,7 @@ function windFiguresHTML(
           runwayHeadingDeg: ori,
           crosswindLimitKt: ori != null && Number.isFinite(ori) && cw != null && Number.isFinite(cw) && cw > 0 ? cw : undefined,
           refSpeedKt: refV,
+          compact: true,
         })
       : "";
   const consultantUri = consultantSvg ? svgToDataUri(consultantSvg) : "";
