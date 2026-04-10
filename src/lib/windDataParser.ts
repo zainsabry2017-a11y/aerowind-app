@@ -950,6 +950,9 @@ function detectSpeedUnitIsMs(rows: string[][], headers: string[], speedCol: stri
   // If the column name itself mentions knots/kt, trust it — skip auto-detection
   if (/knot|\bkt\b|_kt\b/i.test(speedCol)) return false;
 
+  // If the column name explicitly mentions m/s, trust it immediately
+  if (/m\/s|mps/i.test(speedCol)) return true;
+
   // Use trimmed headers for consistent indexOf lookup
   const trimmedHeaders = headers.map(h => h.trim());
   const colIdx = trimmedHeaders.indexOf(speedCol);
@@ -960,11 +963,12 @@ function detectSpeedUnitIsMs(rows: string[][], headers: string[], speedCol: stri
     .filter(v => !isNaN(v) && v > 0);
   if (vals.length === 0) return false;
   const median = vals.sort((a, b) => a - b)[Math.floor(vals.length / 2)];
-  // Typical wind in knots: 5-20 kt. Typical in m/s: 2-10 m/s (~4-20 kt).
-  // If median < 15 AND max < 40 AND values are all small decimals, likely m/s.
+  
+  // To avoid false positives on knot datasets, tighten the heuristic significantly.
+  // Typical knot datasets often have medians around 8-12 and max around 30-40.
+  // Real m/s datasets often have a very low median (2-5) and a much lower max.
   const max = Math.max(...vals);
-  // Strong signal: all speeds < 20 and many are fractional (m/s range)
-  return median < 15 && max < 40 && vals.filter(v => v < 20).length / vals.length > 0.9;
+  return median <= 6 && max <= 28 && vals.filter(v => v < 15).length / vals.length > 0.90;
 }
 
 // ── Dataset classification ─────────────────────────────
@@ -1025,8 +1029,9 @@ function assessReliability(
 
   if (missingValues > totalRows * 0.1) { score -= 20; reasons.push("More than 10% missing values"); }
 
-  if (records.length < 8760) { score -= 10; reasons.push("Less than 1 year of hourly data"); }
-  if (records.length < 4380) { score -= 15; reasons.push("Less than 6 months of data"); }
+  const validRecordCount = records.filter((r) => r.isValid).length;
+  if (validRecordCount < 8760) { score -= 10; reasons.push("Less than 1 year of hourly data"); }
+  if (validRecordCount < 4380) { score -= 15; reasons.push("Less than 6 months of data"); }
 
   if (datasetType === "daily" || datasetType === "monthly") {
     score -= 20;
@@ -1181,7 +1186,22 @@ export async function parseWindData(file: File, calmThreshold: number = 3): Prom
   if (dates.length >= 2) dateRange = { start: dates[0], end: dates[dates.length - 1] };
 
   const datasetType = classifyDataset(records);
-  const { reliability, reasons } = assessReliability(records, dataRows.length, invalidRows, missingValues, datasetType);
+  const validRowCount = records.filter((r) => r.isValid).length;
+  const partialRowCount = records.length - validRowCount;
+  /** Rows that are not fully usable (missing dir or speed, or never imported): matches UI "valid / total". */
+  const reportedInvalidRows = dataRows.length - validRowCount;
+  if (partialRowCount > 0) {
+    warnings.push(
+      `ℹ ${partialRowCount.toLocaleString()} row(s) have wind direction or speed missing — excluded from valid count (common in Excel exports with blank cells).`
+    );
+  }
+  const { reliability, reasons } = assessReliability(
+    records,
+    dataRows.length,
+    reportedInvalidRows,
+    missingValues,
+    datasetType
+  );
 
   // Aggregated outlier summaries (avoid spamming one warning per row)
   if (speedOutlierCount > 0) {
@@ -1198,8 +1218,8 @@ export async function parseWindData(file: File, calmThreshold: number = 3): Prom
   return {
     records,
     totalRows: dataRows.length,
-    validRows: records.length,
-    invalidRows,
+    validRows: validRowCount,
+    invalidRows: reportedInvalidRows,
     missingValues,
     dateRange,
     datasetType,

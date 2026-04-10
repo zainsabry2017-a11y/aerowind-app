@@ -64,28 +64,37 @@ function getMonth(record: WindRecord): number | null {
   return getObservationCalendarMonth1to12(record);
 }
 
-// ── Main wind rose calculator ──────────────────────────
-
-export function calculateWindRose(records: WindRecord[], options: WindRoseOptions): WindRoseResult {
-  const { sectorSize, speedBins, calmThreshold, useGust, monthFilter, seasonFilter } = options;
-
-  // Filter records
+/** Valid observations after the same month/season filters used by {@link calculateWindRose}. */
+export function filterRecordsForWindRose(
+  records: WindRecord[],
+  options: Pick<WindRoseOptions, "monthFilter" | "seasonFilter">
+): WindRecord[] {
   let filtered = records.filter((r) => r.isValid);
 
-  if (monthFilter && monthFilter.length > 0) {
+  if (options.monthFilter && options.monthFilter.length > 0) {
     filtered = filtered.filter((r) => {
       const m = getMonth(r);
-      return m !== null && monthFilter.includes(m);
+      return m !== null && options.monthFilter!.includes(m);
     });
   }
 
-  if (seasonFilter && seasonFilter.length > 0) {
-    const months = new Set(seasonFilter.flatMap((s) => SEASON_MONTHS[s]));
+  if (options.seasonFilter && options.seasonFilter.length > 0) {
+    const months = new Set(options.seasonFilter.flatMap((s) => SEASON_MONTHS[s]));
     filtered = filtered.filter((r) => {
       const m = getMonth(r);
       return m !== null && months.has(m);
     });
   }
+
+  return filtered;
+}
+
+// ── Main wind rose calculator ──────────────────────────
+
+export function calculateWindRose(records: WindRecord[], options: WindRoseOptions): WindRoseResult {
+  const { sectorSize, speedBins, calmThreshold, useGust, monthFilter, seasonFilter } = options;
+
+  const filtered = filterRecordsForWindRose(records, { monthFilter, seasonFilter });
 
   const totalObs = filtered.length;
   let calmCount = 0;

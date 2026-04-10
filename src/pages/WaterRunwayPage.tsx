@@ -16,7 +16,12 @@ import { AeroInput, AeroSelect } from "@/components/AeroInput";
 import AeroDataTable from "@/components/AeroDataTable";
 
 import { parseWindData, type ParsedWindData, type WindRecord } from "@/lib/windDataParser";
-import { calculateWindRose, CONSULTANT_GRID_SPEED_EDGES, windVectorMeanDirectionDeg } from "@/lib/windRoseCalculator";
+import {
+  calculateWindRose,
+  CONSULTANT_GRID_SPEED_EDGES,
+  filterRecordsForWindRose,
+  windVectorMeanDirectionDeg,
+} from "@/lib/windRoseCalculator";
 import { renderConsultantGridWindRose, renderEngineeringWindRose, renderExecutiveWindRose } from "@/lib/windRoseRenderer";
 import { calculateRunwayUsability, type RunwayUsabilityResult, optimizeRunwayOrientation, type OptimizationResult } from "@/lib/windComponents";
 import { aircraftDatabase, searchAircraft, filterByCategory, type AircraftData } from "@/data/aircraftDatabase";
@@ -133,6 +138,15 @@ const WaterRunwayPage = () => {
 
   // ── Derived wind data ──
   const records = useMemo<WindRecord[]>(() => parsedData?.records ?? [], [parsedData]);
+
+  const windRoseScopedRecords = useMemo(
+    () =>
+      filterRecordsForWindRose(records, {
+        monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
+        seasonFilter: null,
+      }),
+    [records, monthFilter]
+  );
 
   const windRose = useMemo(() => {
     if (records.length === 0) return null;
@@ -510,13 +524,15 @@ const WaterRunwayPage = () => {
                   limit={effectiveXw} 
                   mode="water" 
                 />
-                <AdvancedWindAnalysis 
-                  windRose={windRose || null} 
-                  records={parsedData?.records || []} 
-                  orientation={optimization?.bestHeading ?? (rwHeading !== "" ? parseFloat(rwHeading) : null)} 
-                  cwLimit={effectiveXw} 
-                  mode="water" 
-                  fileNamePrefix="water_runway" 
+                <AdvancedWindAnalysis
+                  windRose={windRose || null}
+                  records={windRoseScopedRecords}
+                  orientation={optimization?.bestHeading ?? (rwHeading !== "" ? parseFloat(rwHeading) : null)}
+                  cwLimit={effectiveXw}
+                  mode="water"
+                  fileNamePrefix="water_runway"
+                  calmThresholdKts={parseFloat(calmThresh) || 1}
+                  windRoseCalmThresholdKt={parseFloat(calmThresh) || 1}
                 />
               </div>
             </>

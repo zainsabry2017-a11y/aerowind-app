@@ -15,7 +15,14 @@ import { AeroSelect, AeroInput } from "@/components/AeroInput";
 import CrosswindCalculator from "@/components/CrosswindCalculator";
 import ApproachAdvisor, { type ApproachAnalysisResult } from "@/components/ApproachAdvisor";
 import { parseWindData, type ParsedWindData, type WindRecord } from "@/lib/windDataParser";
-import { calculateWindRose, CONSULTANT_GRID_SPEED_EDGES, DEFAULT_WIND_ROSE_OPTIONS, windVectorMeanDirectionDeg, type WindRoseResult } from "@/lib/windRoseCalculator";
+import {
+  calculateWindRose,
+  CONSULTANT_GRID_SPEED_EDGES,
+  DEFAULT_WIND_ROSE_OPTIONS,
+  filterRecordsForWindRose,
+  windVectorMeanDirectionDeg,
+  type WindRoseResult,
+} from "@/lib/windRoseCalculator";
 import { renderConsultantGridWindRose, renderEngineeringWindRose, renderExecutiveWindRose } from "@/lib/windRoseRenderer";
 import { loadSampleDataAsFile, SAMPLE_PRESETS } from "@/lib/sampleDataGenerator";
 import { calculateRunwayUsability, optimizeRunwayOrientation, type RunwayUsabilityResult, type OptimizationResult } from "@/lib/windComponents";
@@ -156,6 +163,16 @@ const AirportPage = () => {
 
   // ─── Derived wind data ────────────────────────────────────────────────────
   const records = useMemo<WindRecord[]>(() => parsedData?.records ?? [], [parsedData]);
+
+  /** Same subset as `windRose` (valid + month filter) — keeps Advanced Wind crosswind counts aligned with the rose. */
+  const windRoseScopedRecords = useMemo(
+    () =>
+      filterRecordsForWindRose(parsedData?.records ?? [], {
+        monthFilter: monthFilter === "all" ? null : [parseInt(monthFilter)],
+        seasonFilter: null,
+      }),
+    [parsedData, monthFilter]
+  );
 
   const windRose = useMemo<WindRoseResult | null>(() => {
     if (!parsedData) return null;
@@ -728,13 +745,15 @@ const AirportPage = () => {
                         limit={effectiveXw} 
                         mode="airport" 
                       />
-                      <AdvancedWindAnalysis 
-                        windRose={windRose || null} 
-                        records={parsedData?.records || []} 
-                        orientation={optimization?.bestHeading ?? (rwHeading ? parseFloat(rwHeading) : null)} 
-                        cwLimit={effectiveXw} 
-                        mode="airport" 
-                        fileNamePrefix="airport" 
+                      <AdvancedWindAnalysis
+                        windRose={windRose || null}
+                        records={windRoseScopedRecords}
+                        orientation={optimization?.bestHeading ?? (rwHeading ? parseFloat(rwHeading) : null)}
+                        cwLimit={effectiveXw}
+                        mode="airport"
+                        fileNamePrefix="airport"
+                        calmThresholdKts={parseFloat(calmThresh) || 1}
+                        windRoseCalmThresholdKt={parseFloat(calmThresh) || 1}
                       />
                     </div>
                   </>
