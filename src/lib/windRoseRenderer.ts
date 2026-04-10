@@ -436,7 +436,7 @@ export function renderConsultantGridWindRose(data: WindRoseResult, opts: Consult
       corridor += corridorRectFromCenter(
         cx,
         cy,
-        calmR,
+        0,
         plotR,
         bandW,
         centerDeg,
