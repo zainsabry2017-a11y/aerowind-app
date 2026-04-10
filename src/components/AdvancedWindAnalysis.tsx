@@ -2,21 +2,37 @@ import React, { useMemo } from "react";
 import { Download, Compass, ArrowDown, AlertTriangle, CheckCircle2 } from "lucide-react";
 import type { WindRoseResult } from "@/lib/windRoseCalculator";
 import type { WindRecord } from "@/lib/windDataParser";
+import { calculateWindComponents, resolvedFatoSecondAxisDeg } from "@/lib/windComponents";
 import { exportCSV } from "@/lib/exportUtils";
 
 interface AdvancedWindAnalysisProps {
   windRose: WindRoseResult | null;
   records: WindRecord[];
   orientation: number | null;
+  /** Second FATO inbound (°); when null, reciprocal of orientation is used */
+  orientation2?: number | null;
   cwLimit: number | null;
   mode: "airport" | "heliport" | "water";
   fileNamePrefix: string;
   /** When set with heliport mode, calm classification matches wind rose / FATO analysis */
   calmThresholdKts?: number;
   useGust?: boolean;
+  /** Must match the calm threshold used to build `windRose` (for Speed Distribution calm row label). */
+  windRoseCalmThresholdKt?: number;
 }
 
-export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, mode, fileNamePrefix, calmThresholdKts, useGust = false }: AdvancedWindAnalysisProps) => {
+export const AdvancedWindAnalysis = ({
+  windRose,
+  records,
+  orientation,
+  orientation2 = null,
+  cwLimit,
+  mode,
+  fileNamePrefix,
+  calmThresholdKts,
+  useGust = false,
+  windRoseCalmThresholdKt,
+}: AdvancedWindAnalysisProps) => {
 
   const prevailingSummary = useMemo(() => {
     if (!windRose) return null;
@@ -27,23 +43,43 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
     };
   }, [windRose]);
 
-  const speedDistRows = useMemo(() => {
+  const speedBinRows = useMemo(() => {
     if (!windRose) return [];
     return windRose.speedBinRanges.map((range, i) => {
-      let count = 0; let freq = 0;
-      windRose.bins.forEach(bin => {
-        if (bin.speedBins[i]) { count += bin.speedBins[i].count; freq += bin.speedBins[i].frequency; }
+      let count = 0;
+      let freq = 0;
+      windRose.bins.forEach((bin) => {
+        if (bin.speedBins[i]) {
+          count += bin.speedBins[i].count;
+          freq += bin.speedBins[i].frequency;
+        }
       });
-      return { label: range.label, count, freq };
+      return { label: range.label, count, freq, calm: false as const };
     });
   }, [windRose]);
+
+  const speedDistRows = useMemo(() => {
+    if (!windRose) return [];
+    const calmLabel =
+      windRoseCalmThresholdKt != null && Number.isFinite(windRoseCalmThresholdKt)
+        ? `Calm (≤ ${windRoseCalmThresholdKt} kt)`
+        : "Calm (≤ threshold)";
+    return [
+      ...speedBinRows,
+      {
+        label: calmLabel,
+        count: windRose.calmCount,
+        freq: windRose.calmFrequency,
+        calm: true as const,
+      },
+    ];
+  }, [windRose, speedBinRows, windRoseCalmThresholdKt]);
 
   const crosswindData = useMemo(() => {
     if (orientation === null || cwLimit === null || !records.length) return null;
     let within = 0;
     let totalValid = 0;
-    const useDynamicCalm =
-      mode === "heliport" && calmThresholdKts !== undefined && Number.isFinite(calmThresholdKts);
+    const useDynamicCalm = calmThresholdKts !== undefined && Number.isFinite(calmThresholdKts);
     const bins = [
       { label: "0-5 kt", min: 0, max: 5, count: 0 },
       { label: "6-10 kt", min: 5, max: 10, count: 0 },
@@ -64,10 +100,10 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
         return;
       }
       totalValid++;
-      let dirDiff = Math.abs(r.wind_direction_deg - orientation);
-      if (dirDiff > 180) dirDiff = 360 - dirDiff;
-      const rad = (dirDiff * Math.PI) / 180;
-      const cw = Math.abs(windSpd * Math.sin(rad));
+      const sec = resolvedFatoSecondAxisDeg(orientation, orientation2);
+      const comp1 = calculateWindComponents(r.wind_direction_deg, windSpd, orientation);
+      const comp2 = calculateWindComponents(r.wind_direction_deg, windSpd, sec);
+      const cw = Math.min(comp1.crosswind, comp2.crosswind);
 
       if (cw <= cwLimit) within++;
 
@@ -84,7 +120,7 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
       coverage: totalValid > 0 ? (within / totalValid) * 100 : 0,
       totalValid
     };
-  }, [records, orientation, cwLimit, mode, calmThresholdKts, useGust]);
+  }, [records, orientation, orientation2, cwLimit, calmThresholdKts, useGust]);
 
   if (!windRose || !records.length) {
     return (
@@ -198,8 +234,13 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
       {/* Speed Distribution (Table + Chart) */}
       <div>
         <div className="flex items-center justify-between mb-3 border-b border-border pb-2">
-          <p className="text-sm uppercase tracking-[0.15em] text-foreground font-medium">Speed Distribution</p>
-          <button onClick={handleDownloadSpeed} className="text-[10px] flex items-center gap-1.5 px-3 py-1 bg-primary/10 text-primary border border-primary/20 hover:bg-primary hover:text-primary-foreground rounded-sm transition-all shadow-sm no-print">
+          <div>
+            <p className="text-sm uppercase tracking-[0.15em] text-foreground font-medium">Speed Distribution</p>
+            <p className="text-[10px] text-muted-foreground mt-1 max-w-xl leading-snug">
+              Table matches the wind rose: same month/season filter and calm threshold. Frequencies are % of all filtered observations; the calm row completes the total to 100%.
+            </p>
+          </div>
+          <button onClick={handleDownloadSpeed} className="text-[10px] flex items-center gap-1.5 px-3 py-1 bg-primary/10 text-primary border border-primary/20 hover:bg-primary hover:text-primary-foreground rounded-sm transition-all shadow-sm no-print shrink-0">
             <Download className="w-3.5 h-3.5" /> CSV
           </button>
         </div>
@@ -214,9 +255,9 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
             </thead>
             <tbody>
               {speedDistRows.map((r, i) => (
-                <tr key={i} className="border-b border-border/50">
+                <tr key={i} className={`border-b border-border/50 ${r.calm ? "bg-muted/20" : ""}`}>
                   <td className="py-1.5 px-2 text-left">{r.label}</td>
-                  <td className="py-1.5 px-2 text-right">{r.count}</td>
+                  <td className="py-1.5 px-2 text-right">{r.count.toLocaleString()}</td>
                   <td className="py-1.5 px-2 text-right">{r.freq.toFixed(2)}</td>
                 </tr>
               ))}
@@ -224,15 +265,16 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
           </table>
           <div className="flex flex-col justify-center space-y-3 px-4 border-l border-border/50">
             {speedDistRows.map((r, i) => {
-              const maxFreq = Math.max(...speedDistRows.map(x => x.freq)) || 1;
-              const pct = (r.freq / maxFreq) * 100;
+              const maxFreq = Math.max(...speedDistRows.map((x) => x.freq)) || 1;
               return (
                 <div key={i} className="flex items-center gap-3">
-                  <span className="text-[10px] w-12 text-right text-muted-foreground">{r.label}</span>
-                  <div className="flex-1 bg-muted/30 h-3 rounded-sm overflow-hidden border border-border/30">
-                    <div className={`bg-cyan-600 h-full aw-w-spd-${i}`} />
+                  <span className="text-[10px] w-12 text-right text-muted-foreground shrink-0">{r.calm ? "Calm" : r.label}</span>
+                  <div className="flex-1 bg-muted/30 h-3 rounded-sm overflow-hidden border border-border/30 min-w-0">
+                    <div
+                      className={`h-full aw-w-spd-${i} ${r.calm ? "bg-muted-foreground/45" : "bg-cyan-600"}`}
+                    />
                   </div>
-                  <span className="text-[10px] w-10 text-right font-mono-data">{r.freq.toFixed(1)}%</span>
+                  <span className="text-[10px] w-10 text-right font-mono-data shrink-0">{r.freq.toFixed(1)}%</span>
                 </div>
               );
             })}
@@ -243,9 +285,14 @@ export const AdvancedWindAnalysis = ({ windRose, records, orientation, cwLimit, 
       {/* Crosswind Chart & Table */}
       {crosswindData && (
         <div className="pt-4 mt-6 border-t border-border">
-          <div className="flex items-center justify-between mb-3 border-b border-border pb-2">
-            <p className="text-sm uppercase tracking-[0.15em] text-foreground font-medium">Crosswind Analysis</p>
-            <button onClick={handleDownloadCrosswind} className="text-[10px] flex items-center gap-1.5 px-3 py-1 bg-primary/10 text-primary border border-primary/20 hover:bg-primary hover:text-primary-foreground rounded-sm transition-all shadow-sm no-print">
+          <div className="flex items-center justify-between mb-3 border-b border-border pb-2 gap-3">
+            <div className="min-w-0">
+              <p className="text-sm uppercase tracking-[0.15em] text-foreground font-medium">Crosswind Analysis</p>
+              <p className="text-[10px] text-muted-foreground mt-1 max-w-xl leading-snug">
+                Crosswind is the smaller of the two components at this heading and its reciprocal (±180°), matching runway/FATO usability — not the same as counting rows with wind speed above the limit in Excel.
+              </p>
+            </div>
+            <button onClick={handleDownloadCrosswind} className="text-[10px] flex items-center gap-1.5 px-3 py-1 bg-primary/10 text-primary border border-primary/20 hover:bg-primary hover:text-primary-foreground rounded-sm transition-all shadow-sm no-print shrink-0">
               <Download className="w-3.5 h-3.5" /> CSV
             </button>
           </div>

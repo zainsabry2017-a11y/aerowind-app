@@ -1,5 +1,6 @@
 import type { WindRecord } from "@/lib/windDataParser";
 import type { WindRoseResult } from "@/lib/windRoseCalculator";
+import { calculateWindComponents, resolvedFatoSecondAxisDeg } from "@/lib/windComponents";
 
 export interface SpeedDistRow {
   label: string;
@@ -44,6 +45,8 @@ export function computeCrosswindAnalysis(
     mode: "airport" | "heliport" | "water";
     calmThresholdKts?: number;
     useGust?: boolean;
+    /** Second FATO inbound (°); when omitted, reciprocal of orientation */
+    orientation2?: number | null;
   }
 ): CrosswindAnalysisResult | null {
   if (orientation === null || cwLimit === null || cwLimit <= 0 || !records.length) return null;
@@ -51,9 +54,7 @@ export function computeCrosswindAnalysis(
   let within = 0;
   let totalValid = 0;
   const useDynamicCalm =
-    options.mode === "heliport" &&
-    options.calmThresholdKts !== undefined &&
-    Number.isFinite(options.calmThresholdKts);
+    options.calmThresholdKts !== undefined && Number.isFinite(options.calmThresholdKts);
   const useGust = options.useGust === true;
 
   const bins: CrosswindBinRow[] = [
@@ -76,10 +77,10 @@ export function computeCrosswindAnalysis(
       return;
     }
     totalValid++;
-    let dirDiff = Math.abs(r.wind_direction_deg - orientation);
-    if (dirDiff > 180) dirDiff = 360 - dirDiff;
-    const rad = (dirDiff * Math.PI) / 180;
-    const cw = Math.abs(windSpd * Math.sin(rad));
+    const sec = resolvedFatoSecondAxisDeg(orientation, options.orientation2);
+    const comp1 = calculateWindComponents(r.wind_direction_deg, windSpd, orientation);
+    const comp2 = calculateWindComponents(r.wind_direction_deg, windSpd, sec);
+    const cw = Math.min(comp1.crosswind, comp2.crosswind);
 
     if (cw <= cwLimit) within++;
 

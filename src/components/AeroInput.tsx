@@ -7,9 +7,10 @@ interface AeroInputProps {
   type?: string;
   value?: string;
   onChange?: (v: string) => void;
+  onBlur?: () => void;
 }
 
-const AeroInput = ({ label, placeholder, unit, type = "text", value, onChange }: AeroInputProps) => (
+const AeroInput = ({ label, placeholder, unit, type = "text", value, onChange, onBlur }: AeroInputProps) => (
   <div className="space-y-1">
     <label className="aero-label">{label}</label>
     <div className="relative">
@@ -18,6 +19,7 @@ const AeroInput = ({ label, placeholder, unit, type = "text", value, onChange }:
         placeholder={placeholder}
         value={value}
         onChange={e => onChange?.(e.target.value)}
+        onBlur={() => onBlur?.()}
         className="aero-input w-full rounded-sm"
       />
       {unit && (

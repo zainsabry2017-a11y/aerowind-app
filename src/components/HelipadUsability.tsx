@@ -4,16 +4,29 @@ import AeroDataTable from "@/components/AeroDataTable";
 import DataReadout from "@/components/DataReadout";
 import { AeroInput, AeroSelect } from "@/components/AeroInput";
 import { helicopterDatabase, type HelicopterData } from "@/data/aircraftDatabase";
-import { calculateRunwayUsability, inboundHeadingForHeadwind, optimizeRunwayOrientation, type RunwayUsabilityResult } from "@/lib/windComponents";
+import {
+  calculateRunwayUsability,
+  formatCompassHdg,
+  ICAO_MIN_FATO_DUAL_AXIS_SEPARATION_DEG,
+  inboundHeadingForHeadwindDual,
+  optimizeRunwayOrientation,
+  parseFatoAxisInput,
+  smallestAngleDifferenceDeg,
+  type RunwayUsabilityResult,
+} from "@/lib/windComponents";
 import { useAnalysis } from "@/contexts/AnalysisContext";
 import type { WindRoseResult } from "@/lib/windRoseCalculator";
 import type { WindRecord } from "@/lib/windDataParser";
 
 export interface HelipadUsabilityResult {
   optimalHeading: number | null;
+  /** Second declared inbound direction (°); reciprocal of optimalHeading when standard axis. */
+  optimalHeading2: number | null;
   usabilityPercent: number | null;
   recommendedApproach: number | null;
   prevailingWind: number | null;
+  /** Set when the two FATO directions are closer than ICAO_MIN_FATO_DUAL_AXIS_SEPARATION_DEG */
+  dualAxisIcwWarning?: string | null;
 }
 
 interface HelipadUsabilityProps {
@@ -71,16 +84,66 @@ const HelipadUsability = ({ records, windRose, inheritedCrosswindLimit, effectiv
   // Default axis = low-number runway end (1–180°) along vector mean, matching the optimizer convention.
   const pNorm = (((Math.round(prevailing) % 360) + 360) % 360) || 360;
   const axisLowDefault = pNorm > 180 ? pNorm - 180 : pNorm;
-  const effectiveHdg = helipadHdg ? parseInt(helipadHdg) : axisLowDefault;
+
+  const resolvedAxis = useMemo(() => {
+    if (!helipadHdg.trim()) {
+      const h1 = axisLowDefault;
+      const h2 = (h1 + 180) % 360;
+      return {
+        valid: true as const,
+        h1,
+        h2,
+        parseError: null as string | null,
+        icaoSeparationWarning: null as string | null,
+      };
+    }
+    const p = parseFatoAxisInput(helipadHdg);
+    if (!p.ok)
+      return {
+        valid: false as const,
+        h1: axisLowDefault,
+        h2: (axisLowDefault + 180) % 360,
+        parseError: p.error,
+        icaoSeparationWarning: null,
+      };
+    return {
+      valid: true as const,
+      h1: p.h1,
+      h2: p.h2,
+      parseError: null,
+      icaoSeparationWarning: p.icaoSeparationWarning,
+    };
+  }, [helipadHdg, axisLowDefault]);
+
+  const placeholderPair = `${formatCompassHdg(axisLowDefault)}/${formatCompassHdg((axisLowDefault + 180) % 360)}`;
+
+  const normalizeFatoFieldOnBlur = useCallback(() => {
+    const t = helipadHdg.trim();
+    if (!t) return;
+    const p = parseFatoAxisInput(t);
+    if (p.ok) setHelipadHdg(`${formatCompassHdg(p.h1)}/${formatCompassHdg(p.h2)}`);
+  }, [helipadHdg]);
 
   const addCandidate = useCallback(() => {
     if (inheritedCrosswindLimit === null && !useCustomCrosswindLimit) return;
-    const h = effectiveHdg;
-    if (isNaN(h) || h < 1 || h > 360) return;
-    const result = calculateRunwayUsability(records, h, effectiveLimit, calmThresholdKts, useGust);
-    setCandidates((prev) => [...prev.filter((c) => c.runwayHeading !== h), result]);
-    if (!helipadHdg) setHelipadHdg(String(h));
-  }, [records, effectiveHdg, effectiveLimit, helipadHdg, calmThresholdKts, useGust, inheritedCrosswindLimit, useCustomCrosswindLimit]);
+    if (!resolvedAxis.valid) return;
+    const { h1, h2 } = resolvedAxis;
+    const result = calculateRunwayUsability(records, h1, effectiveLimit, calmThresholdKts, useGust, h2);
+    setCandidates((prev) => [
+      ...prev.filter((c) => !(c.runwayHeading === h1 && c.reciprocal === h2)),
+      result,
+    ]);
+    if (!helipadHdg.trim()) setHelipadHdg(`${formatCompassHdg(h1)}/${formatCompassHdg(h2)}`);
+  }, [
+    records,
+    resolvedAxis,
+    effectiveLimit,
+    helipadHdg,
+    calmThresholdKts,
+    useGust,
+    inheritedCrosswindLimit,
+    useCustomCrosswindLimit,
+  ]);
 
   const optimization = useMemo(() => {
     if (!showOptimal) return null;
@@ -94,10 +157,29 @@ const HelipadUsability = ({ records, windRose, inheritedCrosswindLimit, effectiv
 
   // Surface result to parent (HeliportPage) via callback
   useEffect(() => {
-    const heading    = optimization?.bestHeading    ?? bestCandidate?.runwayHeading   ?? null;
-    const usability  = optimization?.bestUsability  ?? bestCandidate?.usabilityPercent ?? null;
-    const approach   = heading !== null ? inboundHeadingForHeadwind(prevailing, heading) : null;
-    onResultRef.current?.({ optimalHeading: heading, usabilityPercent: usability, recommendedApproach: approach, prevailingWind: prevailing });
+    const heading = optimization?.bestHeading ?? bestCandidate?.runwayHeading ?? null;
+    const heading2 =
+      optimization != null && heading != null
+        ? (heading + 180) % 360
+        : bestCandidate != null
+          ? bestCandidate.reciprocal
+          : null;
+    const usability = optimization?.bestUsability ?? bestCandidate?.usabilityPercent ?? null;
+    const approach =
+      heading !== null && heading2 !== null ? inboundHeadingForHeadwindDual(prevailing, heading, heading2) : null;
+    const dualAxisIcwWarning =
+      heading != null && heading2 != null &&
+      smallestAngleDifferenceDeg(heading, heading2) < ICAO_MIN_FATO_DUAL_AXIS_SEPARATION_DEG - 1e-6
+        ? `Declared FATO directions are ${smallestAngleDifferenceDeg(heading, heading2).toFixed(0)}° apart (ICAO advisory: often ≥ ${ICAO_MIN_FATO_DUAL_AXIS_SEPARATION_DEG}°).`
+        : null;
+    onResultRef.current?.({
+      optimalHeading: heading,
+      optimalHeading2: heading2,
+      usabilityPercent: usability,
+      recommendedApproach: approach,
+      prevailingWind: prevailing,
+      dualAxisIcwWarning,
+    });
   }, [optimization, bestCandidate, prevailing]);
 
   // Sync helipad data to shared context
@@ -111,18 +193,30 @@ const HelipadUsability = ({ records, windRose, inheritedCrosswindLimit, effectiv
       crosswindLimitKt: effectiveCrosswindLimit,
       crosswindLimitInheritedKt: inheritedCrosswindLimit,
       crosswindLimitIsCustom: useCustomCrosswindLimit,
-      optimalHeading: optimization?.bestHeading ?? null,
+      optimalHeading: optimization?.bestHeading ?? bestCandidate?.runwayHeading ?? null,
+      optimalHeading2:
+        optimization != null && optimization.bestHeading != null
+          ? (optimization.bestHeading + 180) % 360
+          : bestCandidate != null
+            ? bestCandidate.reciprocal
+            : null,
       usabilityPercent: bestCandidate?.usabilityPercent ?? optimization?.bestUsability ?? null,
       prevailingWind: prevailing,
       recommendedApproach: (() => {
-        const axis = optimization?.bestHeading ?? bestCandidate?.runwayHeading ?? null;
-        return axis != null ? inboundHeadingForHeadwind(prevailing, axis) : prevailing;
+        const h1 = optimization?.bestHeading ?? bestCandidate?.runwayHeading ?? null;
+        const h2 =
+          optimization != null && h1 != null
+            ? (h1 + 180) % 360
+            : bestCandidate != null
+              ? bestCandidate.reciprocal
+              : null;
+        return h1 != null && h2 != null ? inboundHeadingForHeadwindDual(prevailing, h1, h2) : prevailing;
       })(),
     });
   }, [globalHelicopterName, globalHelicopterIcao, globalRotorDiameter, globalDValue, globalMtow, effectiveCrosswindLimit, inheritedCrosswindLimit, useCustomCrosswindLimit, optimization, bestCandidate, prevailing]);
 
   const tableRows = candidates.map((c) => [
-    `${formatHdg(c.runwayHeading)}°`,
+    `${formatHdg(c.runwayHeading)}° / ${formatHdg(c.reciprocal)}°`,
     `${c.usabilityPercent.toFixed(2)}%`,
     `${c.componentBreakdown.crosswindExceedPct.toFixed(2)}%`,
     `${c.exceedances}`,
@@ -148,7 +242,23 @@ const HelipadUsability = ({ records, windRose, inheritedCrosswindLimit, effectiv
         )}
 
         {/* FATO / approach heading */}
-        <AeroInput label="FATO axis (1–180° designator)" placeholder={`${formatHdg(effectiveHdg)}° (from vector mean)`} unit="°" value={helipadHdg} onChange={setHelipadHdg} />
+        <AeroInput
+          label="FATO axis (inbound °, one or two / separated)"
+          placeholder={`${placeholderPair} (from vector mean)`}
+          unit="°"
+          value={helipadHdg}
+          onChange={setHelipadHdg}
+          onBlur={normalizeFatoFieldOnBlur}
+        />
+        {resolvedAxis.parseError && (
+          <p className="text-[10px] text-warning font-mono-data mt-1">{resolvedAxis.parseError}</p>
+        )}
+        {resolvedAxis.valid && resolvedAxis.icaoSeparationWarning && (
+          <p className="text-[10px] text-warning font-mono-data mt-1">{resolvedAxis.icaoSeparationWarning}</p>
+        )}
+        <p className="text-[9px] text-muted-foreground/80 font-mono-data">
+          One value adds +180° automatically. Two values: if angle under {ICAO_MIN_FATO_DUAL_AXIS_SEPARATION_DEG}°, analysis still runs with an ICAO advisory warning.
+        </p>
 
         <div className="flex flex-col gap-1.5 pt-2">
           <label className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-mono-data">Analysis Crosswind Limit</label>

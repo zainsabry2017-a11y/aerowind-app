@@ -26,6 +26,7 @@ import {
 } from "@/lib/reportWindAnalysisTables";
 import type { WindRecord } from "@/lib/windDataParser";
 import { DEFAULT_WIND_ROSE_OPTIONS } from "@/lib/windRoseCalculator";
+import { formatCompassHdg, resolvedFatoSecondAxisDeg } from "@/lib/windComponents";
 
 type ReportType = "combined" | "airport" | "heliport" | "water";
 
@@ -254,6 +255,7 @@ function crosswindAnalysisTableDocx(data: CrosswindAnalysisResult) {
 export type DocxWindAnalysisContext = {
   records: WindRecord[];
   orientation: number | null;
+  orientation2?: number | null;
   cwLimit: number;
   mode: "airport" | "heliport" | "water";
   calmThresholdKts?: number;
@@ -313,11 +315,14 @@ async function windFiguresBlocks(label: string, windRose: any, analysisCtx?: Doc
     try {
       const refV = analysisCtx.consultantRefSpeedKt ?? 25;
       const ori = analysisCtx.orientation;
+      const ori2 =
+        ori != null ? resolvedFatoSecondAxisDeg(ori, analysisCtx.orientation2) : null;
       const cwLim = analysisCtx.cwLimit;
       const consultantSvg = renderConsultantGridWindRose(cons, {
         size: 560,
         title: "Direction x speed grid and corridor",
         runwayHeadingDeg: ori,
+        runwayHeading2Deg: ori != null ? ori2 : undefined,
         crosswindLimitKt:
           ori != null && Number.isFinite(ori) && cwLim != null && Number.isFinite(cwLim) && cwLim > 0 ? cwLim : undefined,
         refSpeedKt: refV,
@@ -359,6 +364,7 @@ async function windFiguresBlocks(label: string, windRose: any, analysisCtx?: Doc
         mode: analysisCtx.mode,
         calmThresholdKts: analysisCtx.calmThresholdKts,
         useGust: analysisCtx.useGust,
+        orientation2: analysisCtx.orientation2,
       }
     );
     if (cw) {
@@ -521,6 +527,8 @@ export async function exportEditableReportDocx(args: {
           orientation: d.optimization?.bestHeading ?? null,
           cwLimit: effectiveRunwayCrosswindKt(d.xwLimit, 20),
           mode: "airport",
+          calmThresholdKts: DEFAULT_WIND_ROSE_OPTIONS.calmThreshold,
+          useGust: false,
           consultantWindRose: d.windRoseConsultant ?? null,
           consultantRefSpeedKt: d.consultantRefSpeedKt ?? 25,
         }))
@@ -565,7 +573,12 @@ export async function exportEditableReportDocx(args: {
     children.push(heading("FATO & Approach Orientation", HeadingLevel.HEADING_2, 240, 120));
     children.push(
       kvTable([
-        ["FATO Optimal Heading", d.fatoResult?.optimalHeading != null ? `${String(Math.round(d.fatoResult.optimalHeading)).padStart(3, "0")}° / ${String(Math.round((d.fatoResult.optimalHeading + 180) % 360 || 360)).padStart(3, "0")}°` : "—"],
+        [
+          "FATO Optimal Heading",
+          d.fatoResult?.optimalHeading != null
+            ? `${formatCompassHdg(d.fatoResult.optimalHeading)}° / ${formatCompassHdg(resolvedFatoSecondAxisDeg(d.fatoResult.optimalHeading, d.fatoResult.optimalHeading2))}°`
+            : "—",
+        ],
         ["Crosswind limit (analysis)", d.effectiveHelipadXw != null ? `${Number(d.effectiveHelipadXw).toFixed(1)} kt${d.helipadUseCustomXw ? " (custom)" : ""}` : "—"],
         ["Primary inbound (headwind)", d.fatoResult?.recommendedApproach != null ? `${String(Math.round(d.fatoResult.recommendedApproach)).padStart(3, "0")}°` : "—"],
         ["Usability Achieved", d.fatoResult?.usabilityPercent != null ? `${Number(d.fatoResult.usabilityPercent).toFixed(1)}%` : "—"],
@@ -590,6 +603,7 @@ export async function exportEditableReportDocx(args: {
         ...(await windFiguresBlocks("Heliport", d.windRose, {
           records: d.windData?.records ?? [],
           orientation: d.fatoResult?.optimalHeading ?? null,
+          orientation2: d.fatoResult?.optimalHeading2 ?? null,
           cwLimit: heliCw,
           mode: "heliport",
           calmThresholdKts: DEFAULT_WIND_ROSE_OPTIONS.calmThreshold,
@@ -671,6 +685,8 @@ export async function exportEditableReportDocx(args: {
           orientation: d.rwHeading ? parseFloat(d.rwHeading) : null,
           cwLimit: effectiveRunwayCrosswindKt(d.xwLimit, 12),
           mode: "water",
+          calmThresholdKts: DEFAULT_WIND_ROSE_OPTIONS.calmThreshold,
+          useGust: false,
           consultantWindRose: d.windRoseConsultant ?? null,
           consultantRefSpeedKt: d.consultantRefSpeedKt ?? 25,
         }))

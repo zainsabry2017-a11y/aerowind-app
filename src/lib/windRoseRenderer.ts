@@ -1,5 +1,5 @@
 import type { WindRoseResult } from "./windRoseCalculator";
-import type { RunwayUsabilityResult } from "./windComponents";
+import { smallestAngleDifferenceDeg, type RunwayUsabilityResult } from "./windComponents";
 
 // ── SVG Wind Rose Renderer (4 styles) ──────────────────
 // Premium consultant-grade visuals with high contrast
@@ -227,6 +227,8 @@ export function renderRunwayOverlayWindRose(
 export interface ConsultantGridWindRoseOptions extends RenderOptions {
   /** Inbound runway / FATO axis (°); corridor also mirrored at +180° */
   runwayHeadingDeg?: number | null;
+  /** Second inbound FATO direction when not reciprocal; optional second hatched corridor */
+  runwayHeading2Deg?: number | null;
   crosswindLimitKt?: number;
   /** Half-angle of corridor uses arcsin(L/V); default 25 kt if omitted */
   refSpeedKt?: number;
@@ -253,23 +255,31 @@ function annularSectorPath(
   return `M ${p1i.x} ${p1i.y} A ${rIn} ${rIn} 0 ${largeArc} 1 ${p2i.x} ${p2i.y} L ${p2o.x} ${p2o.y} A ${rOut} ${rOut} 0 ${largeArc} 0 ${p1o.x} ${p1o.y} Z`;
 }
 
-function rotatedRect(
+/** Rectangular corridor band starting at center and extending outward along heading. */
+function corridorRectFromCenter(
   cx: number,
   cy: number,
-  w: number,
-  h: number,
-  rotateDeg: number,
+  innerGap: number,
+  length: number,
+  width: number,
+  headingDeg: number,
   fill: string,
   stroke: string,
   strokeWidth: number,
-  opacity: number
+  opacity: number,
+  fillOpacity: number
 ): string {
-  const x = cx - w / 2;
-  const y = cy - h / 2;
-  return `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" opacity="${opacity}" transform="rotate(${rotateDeg} ${cx} ${cy})"/>`;
+  const w = Math.max(0, width);
+  const gap = Math.max(0, innerGap);
+  const len = Math.max(0, length - gap);
+  // Draw unrotated pointing "east" from (cx,cy), then rotate around center.
+  const x = cx + gap;
+  const y = cy - w / 2;
+  const compass = ((((headingDeg % 360) + 360) % 360) as number);
+  // SVG rotation is relative to +X (east). Compass heading is relative to north.
+  const rot = compass - 90;
+  return `<rect x="${x}" y="${y}" width="${len}" height="${w}" fill="${fill}" fill-opacity="${fillOpacity}" stroke="${stroke}" stroke-width="${strokeWidth}" opacity="${opacity}" transform="rotate(${rot} ${cx} ${cy})"/>`;
 }
-
-// (annulus clip helper removed — corridor is a single band again)
 
 /** Half-angle (°) of “low crosswind” corridor: |sin θ| ≤ L / V at reference speed V. */
 export function crosswindCorridorHalfAngleDeg(crosswindLimitKt: number, refSpeedKt: number): number {
@@ -347,6 +357,7 @@ export function renderConsultantGridWindRose(data: WindRoseResult, opts: Consult
   }
 
   const hdg = opts.runwayHeadingDeg;
+  const hdg2 = opts.runwayHeading2Deg;
   const xwL = opts.crosswindLimitKt;
   const refV = opts.refSpeedKt != null && Number.isFinite(opts.refSpeedKt) ? opts.refSpeedKt : 25;
   const showCorridor =
@@ -409,18 +420,39 @@ export function renderConsultantGridWindRose(data: WindRoseResult, opts: Consult
     rings += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${k === numRings ? GRID : GRID_FAINT}" stroke-width="${k === numRings ? 1.2 : 0.55}"/>`;
   }
 
-  // Hatched corridor as a single rotated rectangular band (raster-safe)
+  // Hatched corridors: rectangular bands from center along each declared inbound direction
   let corridor = "";
   if (showCorridor) {
     const h = ((((hdg as number) % 360) + 360) % 360);
-    // Thickness scales with L/V at a single reference speed.
-    const ratio = Math.min(1, Math.max(0, (xwL as number) / Math.max(refV, 1e-6)));
-    const bandW = (plotR + 58) * 2;
-    const bandHalf = Math.max(8, (plotR + 6) * ratio);
-    const bandH = bandHalf * 2;
-    corridor += `<g>`;
-    corridor += rotatedRect(cx, cy, bandW, bandH, h, "url(#consultantHatch)", GRID, 0.55, 0.42);
-    corridor += `</g>`;
+    const h2 =
+      hdg2 != null && Number.isFinite(hdg2)
+        ? ((((hdg2 as number) % 360) + 360) % 360)
+        : (h + 180) % 360;
+    const sep = smallestAngleDifferenceDeg(h, h2);
+    // Convert half-angle to corridor full width at outer radius.
+    // width ≈ 2 * r * sin(halfDelta)
+    const bandW = Math.max(10, 2 * plotR * Math.sin((halfDelta * Math.PI) / 180));
+    const pushBand = (centerDeg: number) => {
+      corridor += corridorRectFromCenter(
+        cx,
+        cy,
+        calmR + 1,
+        plotR,
+        bandW,
+        centerDeg,
+        "url(#consultantHatch)",
+        GRID,
+        0.5,
+        0.42,
+        0.85
+      );
+    };
+    if (sep <= 1) {
+      pushBand(h);
+    } else {
+      pushBand(h);
+      pushBand(h2);
+    }
   }
 
   // Cells + frequency labels
@@ -483,8 +515,8 @@ export function renderConsultantGridWindRose(data: WindRoseResult, opts: Consult
     ${degTicks}
     ${rings}
     ${radials}
-    ${corridor}
     ${cells}
+    ${corridor}
     <circle cx="${cx}" cy="${cy}" r="${calmR}" fill="${PAPER}" stroke="${GRID}" stroke-width="1.2"/>
     <text x="${cx}" y="${cy - 3}" text-anchor="middle" dominant-baseline="central" fill="${FREQ}" font-size="9" font-family="Courier New, Courier, monospace" font-weight="600">${calmTxt}%</text>
     <text x="${cx}" y="${cy + 8}" text-anchor="middle" fill="${GRID}" font-size="6" font-family="Courier New, Courier, monospace">CALM</text>

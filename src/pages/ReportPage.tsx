@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import AppSidebar from "@/components/AppSidebar";
 import SectionHeader from "@/components/SectionHeader";
 import { DISCLAIMER, REGULATORY_STATEMENT, DATA_LABELS, HELIPORT_DISCLAIMER } from "@/lib/engineeringSafety";
@@ -11,10 +11,11 @@ import { AdvancedWindAnalysis } from "@/components/AdvancedWindAnalysis";
 import { OrientationOptimizer } from "@/components/OrientationOptimizer";
 import { renderConsultantGridWindRose, renderExecutiveWindRose, renderEngineeringWindRose } from "@/lib/windRoseRenderer";
 import { useLocation } from "react-router-dom";
-import { DEFAULT_WIND_ROSE_OPTIONS } from "@/lib/windRoseCalculator";
+import { DEFAULT_WIND_ROSE_OPTIONS, filterRecordsForWindRose } from "@/lib/windRoseCalculator";
 import { effectiveRunwayCrosswindKt, runwayCrosswindReportLabel } from "@/lib/runwayReportCrosswind";
 import { heliportPerfClassDefaultXw } from "@/lib/reportWindAnalysisTables";
 import { formatDimM } from "@/data/aircraftDatabase";
+import { formatCompassHdg, resolvedFatoSecondAxisDeg } from "@/lib/windComponents";
 import { toast } from "sonner";
 
 
@@ -99,6 +100,10 @@ const AirportReportBlock = ({ data, opts, numPrefix = "" }: { data: AirportRepor
   const { projName, projLoc, elevation, refTemp, gradient, aeroCode, notes, windData, windRose, candidates, optimization, xwLimit, crosswindIsCustom, crosswindPreset, rlResult, rlInputs, selectedAc, baseLength, surface } = data;
   const reportAirportCwKt = effectiveRunwayCrosswindKt(xwLimit, 20);
   const reportAirportCwLabel = runwayCrosswindReportLabel(xwLimit, { crosswindIsCustom, crosswindPreset });
+  const reportWindRecordsAirport = useMemo(
+    () => filterRecordsForWindRose(windData?.records ?? [], { monthFilter: null, seasonFilter: null }),
+    [windData?.records]
+  );
   const prevailingBin = windRose?.bins?.reduce((a, b) => (a.totalFrequency > b.totalFrequency ? a : b), windRose.bins[0]);
   const bestCandidate = candidates.length > 0 ? candidates.reduce((a, b) => (a.usabilityPercent > b.usabilityPercent ? a : b)) : null;
 
@@ -161,13 +166,15 @@ const AirportReportBlock = ({ data, opts, numPrefix = "" }: { data: AirportRepor
       />
 
       <SectionHeading num={`${numPrefix}6`} title="Advanced Wind Analysis Dashboard" />
-      <AdvancedWindAnalysis 
-        windRose={windRose || null} 
-        records={windData?.records || []} 
-        orientation={optimization?.bestHeading ?? null} 
-        cwLimit={reportAirportCwKt} 
-        mode="airport" 
-        fileNamePrefix="airport" 
+      <AdvancedWindAnalysis
+        windRose={windRose || null}
+        records={reportWindRecordsAirport}
+        orientation={optimization?.bestHeading ?? null}
+        cwLimit={reportAirportCwKt}
+        mode="airport"
+        fileNamePrefix="airport"
+        calmThresholdKts={DEFAULT_WIND_ROSE_OPTIONS.calmThreshold}
+        windRoseCalmThresholdKt={DEFAULT_WIND_ROSE_OPTIONS.calmThreshold}
       />
     </div>
   );
@@ -177,6 +184,10 @@ const HeliportReportBlock = ({ data, opts, numPrefix = "" }: { data: HeliportRep
   const { projName, projectLoc, elevation, perfClass, heliType, helipadType, notes, windData, windRose, fatoResult, approachResult, selectedHeli, planningCategory, selectionMode, dValue, rotorDia, mtow, helipad, effectiveHelipadXw, helipadUseCustomXw } = data;
   const perfClassDefaultXw = perfClass === "1" ? 17 : perfClass === "2" ? 15 : perfClass === "3" ? 10 : 15;
   const reportHelipadXw = effectiveHelipadXw ?? perfClassDefaultXw;
+  const reportWindRecordsHeli = useMemo(
+    () => filterRecordsForWindRose(windData?.records ?? [], { monthFilter: null, seasonFilter: null }),
+    [windData?.records]
+  );
 
   return (
     <div className="report-facility-block mb-12">
@@ -206,7 +217,12 @@ const HeliportReportBlock = ({ data, opts, numPrefix = "" }: { data: HeliportRep
 
       <SectionHeading num={`${numPrefix}3`} title="FATO & Approach Orientation" />
       <MetaTable rows={[
-        ["FATO Optimal Heading", fatoResult?.optimalHeading != null ? `${String(Math.round(fatoResult.optimalHeading)).padStart(3, "0")}° / ${String(Math.round((fatoResult.optimalHeading + 180) % 360 || 360)).padStart(3, "0")}°` : "—°"],
+        [
+          "FATO Optimal Heading",
+          fatoResult?.optimalHeading != null
+            ? `${formatCompassHdg(fatoResult.optimalHeading)}° / ${formatCompassHdg(resolvedFatoSecondAxisDeg(fatoResult.optimalHeading, fatoResult.optimalHeading2))}°`
+            : "—°",
+        ],
         ["Crosswind limit (analysis)", effectiveHelipadXw != null ? `${Number(effectiveHelipadXw).toFixed(1)} kt${helipadUseCustomXw ? " (custom)" : ""}` : `${perfClassDefaultXw} kt (class default)`],
         ["Primary inbound (headwind)", fatoResult?.recommendedApproach != null ? `${String(Math.round(fatoResult.recommendedApproach)).padStart(3, "0")}°` : "—°"],
         ["Usability Achieved", fatoResult?.usabilityPercent != null ? `${fatoResult.usabilityPercent.toFixed(1)}%` : "—%"],
@@ -236,13 +252,15 @@ const HeliportReportBlock = ({ data, opts, numPrefix = "" }: { data: HeliportRep
       <SectionHeading num={`${numPrefix}6`} title="Advanced Wind Analysis Dashboard" />
       <AdvancedWindAnalysis 
         windRose={windRose || null} 
-        records={windData?.records || []} 
+        records={reportWindRecordsHeli} 
         orientation={fatoResult?.optimalHeading ?? null} 
+        orientation2={fatoResult?.optimalHeading2 ?? null}
         cwLimit={reportHelipadXw} 
         mode="heliport" 
         fileNamePrefix="heliport"
         calmThresholdKts={DEFAULT_WIND_ROSE_OPTIONS.calmThreshold}
         useGust={false}
+        windRoseCalmThresholdKt={DEFAULT_WIND_ROSE_OPTIONS.calmThreshold}
       />
     </div>
   );
@@ -252,6 +270,10 @@ const WaterRunwayReportBlock = ({ data, opts, numPrefix = "" }: { data: WaterRep
   const { projName, projLoc, elevation, notes, windData, windRose, candidates, optimization, xwLimit, crosswindIsCustom, crosswindPreset, rwHeading, selectedAc, waveState, waterType, waterTemp, channelType, availDepth, currentSpeed } = data;
   const reportWaterCwKt = effectiveRunwayCrosswindKt(xwLimit, 12);
   const reportWaterCwLabel = runwayCrosswindReportLabel(xwLimit, { crosswindIsCustom, crosswindPreset });
+  const reportWindRecordsWater = useMemo(
+    () => filterRecordsForWindRose(windData?.records ?? [], { monthFilter: null, seasonFilter: null }),
+    [windData?.records]
+  );
   const waveFactor = waveState === "rough" ? 2.0 : waveState === "moderate" ? 1.4 : waveState === "slight" ? 1.25 : waveState === "smooth" ? 1.1 : 1.0;
   const effectiveLen = selectedAc ? Math.round(selectedAc.refFieldLength_m * waveFactor) : 0;
   return (
@@ -305,13 +327,15 @@ const WaterRunwayReportBlock = ({ data, opts, numPrefix = "" }: { data: WaterRep
       />
 
       <SectionHeading num={`${numPrefix}6`} title="Advanced Wind Analysis Dashboard" />
-      <AdvancedWindAnalysis 
-        windRose={windRose || null} 
-        records={windData?.records || []} 
-        orientation={rwHeading !== "" ? parseFloat(rwHeading) : null} 
-        cwLimit={reportWaterCwKt} 
-        mode="water" 
-        fileNamePrefix="water_runway" 
+      <AdvancedWindAnalysis
+        windRose={windRose || null}
+        records={reportWindRecordsWater}
+        orientation={rwHeading !== "" ? parseFloat(rwHeading) : null}
+        cwLimit={reportWaterCwKt}
+        mode="water"
+        fileNamePrefix="water_runway"
+        calmThresholdKts={DEFAULT_WIND_ROSE_OPTIONS.calmThreshold}
+        windRoseCalmThresholdKt={DEFAULT_WIND_ROSE_OPTIONS.calmThreshold}
       />
     </div>
   );
@@ -360,7 +384,8 @@ const ReportPage = () => {
     cwLimit: number,
     label: string,
     consultantRose: any = null,
-    consultantRefKt = 25
+    consultantRefKt = 25,
+    orientation2: number | null = null
   ): string => {
     if (!windRose) return `<p style="font-style:italic;color:#888;font-size:9pt;">No wind data available for ${label}.</p>`;
 
@@ -379,6 +404,8 @@ const ReportPage = () => {
           size: 540,
           title: "Direction × speed grid & corridor",
           runwayHeadingDeg: orientation,
+          runwayHeading2Deg:
+            orientation != null ? resolvedFatoSecondAxisDeg(orientation, orientation2) : undefined,
           crosswindLimitKt:
             orientation != null && Number.isFinite(orientation) && cwLimit > 0 ? cwLimit : undefined,
           refSpeedKt: consultantRefKt,
@@ -663,7 +690,12 @@ const ReportPage = () => {
       ]);
       body += sec("3", "FATO Orientation");
       body += kv([
-        ["Optimal FATO Heading", d.fatoResult?.optimalHeading != null ? `${String(Math.round(d.fatoResult.optimalHeading)).padStart(3,"0")}° / ${String(Math.round((d.fatoResult.optimalHeading+180)%360||360)).padStart(3,"0")}°` : "—"],
+        [
+          "Optimal FATO Heading",
+          d.fatoResult?.optimalHeading != null
+            ? `${formatCompassHdg(d.fatoResult.optimalHeading)}° / ${formatCompassHdg(resolvedFatoSecondAxisDeg(d.fatoResult.optimalHeading, d.fatoResult.optimalHeading2))}°`
+            : "—",
+        ],
         ["Usability Achieved", d.fatoResult?.usabilityPercent != null ? `${d.fatoResult.usabilityPercent.toFixed(1)}%` : "—"],
         ["Recommended Approach Direction", d.approachResult?.approachDir != null ? `${String(Math.round(d.approachResult.approachDir)).padStart(3,"0")}°` : "—"],
       ]);
@@ -683,7 +715,8 @@ const ReportPage = () => {
         heliCwPdf,
         "Heliport",
         d.windRoseConsultant ?? null,
-        d.consultantRefSpeedKt ?? 25
+        d.consultantRefSpeedKt ?? 25,
+        d.fatoResult?.optimalHeading2 ?? null
       );
     }
 

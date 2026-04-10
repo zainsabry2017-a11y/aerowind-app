@@ -9,6 +9,7 @@ import {
 } from "@/lib/reportWindAnalysisTables";
 import type { WindRecord } from "@/lib/windDataParser";
 import { DEFAULT_WIND_ROSE_OPTIONS } from "@/lib/windRoseCalculator";
+import { formatCompassHdg, resolvedFatoSecondAxisDeg } from "@/lib/windComponents";
 
 type ReportType = "combined" | "airport" | "heliport" | "water";
 
@@ -115,6 +116,8 @@ const simpleTable = (headers: string[], rows: string[][]) => {
 export type WindFiguresAnalysisContext = {
   records: WindRecord[];
   orientation: number | null;
+  /** Second FATO inbound (°) for heliport dual-axis */
+  orientation2?: number | null;
   cwLimit: number;
   mode: "airport" | "heliport" | "water";
   calmThresholdKts?: number;
@@ -154,6 +157,7 @@ function windFiguresHTML(
           mode: analysisCtx.mode,
           calmThresholdKts: analysisCtx.calmThresholdKts,
           useGust: analysisCtx.useGust,
+          orientation2: analysisCtx.orientation2,
         })
       : null;
 
@@ -171,6 +175,7 @@ function windFiguresHTML(
 
   const cw = analysisCtx?.cwLimit;
   const ori = analysisCtx?.orientation ?? null;
+  const ori2 = ori != null ? resolvedFatoSecondAxisDeg(ori, analysisCtx?.orientation2) : null;
   const refV = analysisCtx?.consultantRefSpeedKt ?? 25;
   const cons = analysisCtx?.consultantWindRose;
   const consultantSvg =
@@ -179,6 +184,7 @@ function windFiguresHTML(
           size: 560,
           title: "Direction × speed grid & corridor",
           runwayHeadingDeg: ori,
+          runwayHeading2Deg: ori != null ? ori2 : undefined,
           crosswindLimitKt: ori != null && Number.isFinite(ori) && cw != null && Number.isFinite(cw) && cw > 0 ? cw : undefined,
           refSpeedKt: refV,
           compact: true,
@@ -324,6 +330,8 @@ export function buildProfessionalReportHTML(
           orientation: d.optimization?.bestHeading ?? null,
           cwLimit: effectiveRunwayCrosswindKt(d.xwLimit, 20),
           mode: "airport",
+          calmThresholdKts: DEFAULT_WIND_ROSE_OPTIONS.calmThreshold,
+          useGust: false,
           consultantWindRose: d.windRoseConsultant ?? null,
           consultantRefSpeedKt: d.consultantRefSpeedKt ?? 25,
         },
@@ -347,7 +355,12 @@ export function buildProfessionalReportHTML(
     ]);
     body += `<h2>FATO & Approach Orientation</h2>`;
     body += kvTable([
-      ["FATO Optimal Heading", d.fatoResult?.optimalHeading != null ? `${String(Math.round(d.fatoResult.optimalHeading)).padStart(3, "0")}° / ${String(Math.round((d.fatoResult.optimalHeading + 180) % 360 || 360)).padStart(3, "0")}°` : "—"],
+      [
+        "FATO Optimal Heading",
+        d.fatoResult?.optimalHeading != null
+          ? `${formatCompassHdg(d.fatoResult.optimalHeading)}° / ${formatCompassHdg(resolvedFatoSecondAxisDeg(d.fatoResult.optimalHeading, d.fatoResult.optimalHeading2))}°`
+          : "—",
+      ],
       ["Crosswind limit (analysis)", d.effectiveHelipadXw != null ? `${Number(d.effectiveHelipadXw).toFixed(1)} kt${d.helipadUseCustomXw ? " (custom)" : ""}` : "—"],
       ["Primary inbound (headwind)", d.fatoResult?.recommendedApproach != null ? `${String(Math.round(d.fatoResult.recommendedApproach)).padStart(3, "0")}°` : "—"],
       ["Usability Achieved", d.fatoResult?.usabilityPercent != null ? `${Number(d.fatoResult.usabilityPercent).toFixed(1)}%` : "—"],
@@ -363,6 +376,7 @@ export function buildProfessionalReportHTML(
         {
           records: d.windData?.records ?? [],
           orientation: d.fatoResult?.optimalHeading ?? null,
+          orientation2: d.fatoResult?.optimalHeading2 ?? null,
           cwLimit: heliCw,
           mode: "heliport",
           calmThresholdKts: DEFAULT_WIND_ROSE_OPTIONS.calmThreshold,
@@ -416,6 +430,8 @@ export function buildProfessionalReportHTML(
           orientation: d.rwHeading ? parseFloat(d.rwHeading) : null,
           cwLimit: effectiveRunwayCrosswindKt(d.xwLimit, 12),
           mode: "water",
+          calmThresholdKts: DEFAULT_WIND_ROSE_OPTIONS.calmThreshold,
+          useGust: false,
           consultantWindRose: d.windRoseConsultant ?? null,
           consultantRefSpeedKt: d.consultantRefSpeedKt ?? 25,
         },
